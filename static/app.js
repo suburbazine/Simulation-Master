@@ -2010,6 +2010,13 @@ function setupChassis3DStudio() {
     });
   }
 
+  const btnRecGif = document.getElementById("btnRecordChassisGif");
+  if (btnRecGif) {
+    btnRecGif.addEventListener("click", () => {
+      recordChassisRunToGif();
+    });
+  }
+
   // Quick-Jump Timeline Event Buttons
   document.querySelectorAll(".btn-jump-t").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -2992,3 +2999,471 @@ function renderSubmoduleInspectorCards(s) {
     })
     .join("");
 }
+
+// ============================================================================
+// 3D RUN ANIMATED GIF89a RECORDER (LOCKED TO START & END OF RUN AT ACTIVE CADENCE)
+// ============================================================================
+let gifRecordingActive = false;
+let gifRecordingAbort = false;
+
+// Build a tailored 256-color palette covering dark slate UI, white/cyan text,
+// and the full 0..100% Cyan -> Emerald -> Amber -> Red thermal/stress gradient
+// (both full-intensity and alpha-blended over the dark viewport), plus a 32K RGB555 LUT.
+function buildChassisGifPaletteAndLUT() {
+  const palette = new Uint8Array(256 * 3);
+  let idx = 0;
+  const addColor = (r, g, b) => {
+    if (idx >= 256) return;
+    palette[idx * 3] = Math.max(0, Math.min(255, Math.round(r)));
+    palette[idx * 3 + 1] = Math.max(0, Math.min(255, Math.round(g)));
+    palette[idx * 3 + 2] = Math.max(0, Math.min(255, Math.round(b)));
+    idx++;
+  };
+
+  // 0..19: Dark backgrounds, slate grid lines, and crisp grayscale/white HUD text
+  const basePresets = [
+    [7, 10, 16],    [9, 13, 22],    [11, 16, 26],   [13, 19, 32],
+    [15, 23, 42],   [23, 34, 54],   [30, 41, 59],   [51, 65, 85],
+    [71, 85, 105],  [100, 116, 139],[148, 163, 184],[180, 196, 214],
+    [203, 213, 225],[226, 232, 240],[241, 245, 249],[255, 255, 255],
+    [0, 180, 216],  [56, 189, 248], [255, 82, 82],  [185, 246, 202],
+  ];
+  basePresets.forEach(([r, g, b]) => addColor(r, g, b));
+
+  // Helper matching stressIndexToColor RGB values
+  const evalStressRGB = (pct) => {
+    const s = Math.max(0, Math.min(100, pct));
+    if (s < 35) {
+      const u = s / 35.0;
+      return [0, 229 * (1 - u) + 230 * u, 255 * (1 - u) + 118 * u];
+    } else if (s < 70) {
+      const u = (s - 35.0) / 35.0;
+      return [255 * u, 230 * (1 - u) + 171 * u, 118 * (1 - u)];
+    } else {
+      const u = (s - 70.0) / 30.0;
+      return [255, 171 * (1 - u) + 38 * u, 48 * u];
+    }
+  };
+
+  // 20..83 (64 entries): Full-brightness stress/thermal spectrum (0..100%)
+  for (let i = 0; i < 64; i++) {
+    const [r, g, b] = evalStressRGB((i / 63.0) * 100.0);
+    addColor(r, g, b);
+  }
+  // 84..147 (64 entries): Mid-alpha (0.52) blended over #090d16 background for glow & anti-aliased edges
+  for (let i = 0; i < 64; i++) {
+    const [r, g, b] = evalStressRGB((i / 63.0) * 100.0);
+    addColor(r * 0.52 + 9 * 0.48, g * 0.52 + 13 * 0.48, b * 0.52 + 22 * 0.48);
+  }
+  // 148..195 (48 entries): Dim-alpha (0.24) blended over #090d16 for ghosted non-focused sub-modules
+  for (let i = 0; i < 48; i++) {
+    const [r, g, b] = evalStressRGB((i / 47.0) * 100.0);
+    addColor(r * 0.24 + 9 * 0.76, g * 0.24 + 13 * 0.76, b * 0.24 + 22 * 0.76);
+  }
+  // 196..255 (60 entries): General 4x4x3 RGB cube + extra UI accents to cover any remaining colors
+  for (let r = 0; r < 4; r++) {
+    for (let g = 0; g < 4; g++) {
+      for (let b = 0; b < 3; b++) {
+        addColor((r / 3) * 255, (g / 3) * 255, (b / 2) * 255);
+      }
+    }
+  }
+  while (idx < 256) {
+    addColor(12, 18, 28);
+  }
+
+  // Build 15-bit RGB555 (32,768 entries) nearest-neighbor lookup table for O(1) pixel quantization
+  const lut = new Uint8Array(32768);
+  for (let r5 = 0; r5 < 32; r5++) {
+    const r = (r5 << 3) | (r5 >> 2);
+    for (let g5 = 0; g5 < 32; g5++) {
+      const g = (g5 << 3) | (g5 >> 2);
+      for (let b5 = 0; b5 < 32; b5++) {
+        const b = (b5 << 3) | (b5 >> 2);
+        let bestIdx = 0;
+        let bestDist = 1e9;
+        for (let p = 0; p < 256; p++) {
+          const dr = r - palette[p * 3];
+          const dg = g - palette[p * 3 + 1];
+          const db = b - palette[p * 3 + 2];
+          const d = dr * dr * 2 + dg * dg * 3 + db * db * 2;
+          if (d < bestDist) {
+            bestDist = d;
+            bestIdx = p;
+            if (d === 0) break;
+          }
+        }
+        lut[(r5 << 10) | (g5 << 5) | b5] = bestIdx;
+      }
+    }
+  }
+
+  return { palette, lut };
+}
+
+// Fast GIF89a + 8-bit LZW stream encoder
+class Gif89aEncoder {
+  constructor(width, height, palette) {
+    this.width = width;
+    this.height = height;
+    this.bytes = [];
+    this.trie = new Int32Array(4096 * 256);
+
+    // 1. GIF89a Header ("GIF89a")
+    this.writeASCII("GIF89a");
+
+    // 2. Logical Screen Descriptor (Global Color Table = 256 entries -> packed = 0xF7)
+    this.writeU16(width);
+    this.writeU16(height);
+    this.bytes.push(0xf7, 0x00, 0x00);
+
+    // 3. Global Color Table (768 bytes)
+    for (let i = 0; i < 768; i++) {
+      this.bytes.push(palette[i]);
+    }
+
+    // 4. Netscape 2.0 Infinite Loop Application Extension
+    this.bytes.push(0x21, 0xff, 0x0b);
+    this.writeASCII("NETSCAPE2.0");
+    this.bytes.push(0x03, 0x01, 0x00, 0x00, 0x00);
+  }
+
+  writeASCII(str) {
+    for (let i = 0; i < str.length; i++) {
+      this.bytes.push(str.charCodeAt(i) & 0xff);
+    }
+  }
+
+  writeU16(val) {
+    this.bytes.push(val & 0xff, (val >> 8) & 0xff);
+  }
+
+  addFrame(indexedPixels, delayCs) {
+    // 1. Graphic Control Extension (8 bytes)
+    this.bytes.push(0x21, 0xf9, 0x04, 0x04);
+    this.writeU16(Math.max(2, Math.round(delayCs)));
+    this.bytes.push(0x00, 0x00);
+
+    // 2. Image Descriptor (10 bytes)
+    this.bytes.push(0x2c);
+    this.writeU16(0);
+    this.writeU16(0);
+    this.writeU16(this.width);
+    this.writeU16(this.height);
+    this.bytes.push(0x00);
+
+    // 3. LZW Image Data (minCodeSize = 8)
+    const minCodeSize = 8;
+    this.bytes.push(minCodeSize);
+
+    const clearCode = 256;
+    const eoiCode = 257;
+    let codeSize = 9;
+    let nextCode = 258;
+    const trie = this.trie;
+    trie.fill(-1);
+
+    let bitBuf = 0;
+    let bitCount = 0;
+    const subBlock = new Uint8Array(255);
+    let subBlockLen = 0;
+
+    const flushSubBlock = () => {
+      if (subBlockLen > 0) {
+        this.bytes.push(subBlockLen);
+        for (let i = 0; i < subBlockLen; i++) {
+          this.bytes.push(subBlock[i]);
+        }
+        subBlockLen = 0;
+      }
+    };
+
+    const emitCode = (code, bits) => {
+      bitBuf |= code << bitCount;
+      bitCount += bits;
+      while (bitCount >= 8) {
+        subBlock[subBlockLen++] = bitBuf & 0xff;
+        if (subBlockLen === 255) flushSubBlock();
+        bitBuf >>= 8;
+        bitCount -= 8;
+      }
+    };
+
+    emitCode(clearCode, codeSize);
+
+    let prefix = indexedPixels[0];
+    const n = indexedPixels.length;
+    for (let i = 1; i < n; i++) {
+      const c = indexedPixels[i];
+      const key = (prefix << 8) | c;
+      const next = trie[key];
+      if (next !== -1) {
+        prefix = next;
+      } else {
+        emitCode(prefix, codeSize);
+        if (nextCode < 4096) {
+          if (nextCode === 1 << codeSize && codeSize < 12) {
+            codeSize++;
+          }
+          trie[key] = nextCode++;
+        } else {
+          emitCode(clearCode, codeSize);
+          trie.fill(-1);
+          codeSize = 9;
+          nextCode = 258;
+        }
+        prefix = c;
+      }
+    }
+
+    emitCode(prefix, codeSize);
+    emitCode(eoiCode, codeSize);
+
+    if (bitCount > 0) {
+      subBlock[subBlockLen++] = bitBuf & 0xff;
+    }
+    flushSubBlock();
+    this.bytes.push(0x00); // Block terminator
+  }
+
+  finish() {
+    this.bytes.push(0x3b); // GIF Trailer
+    return new Uint8Array(this.bytes);
+  }
+}
+
+// Render the self-contained HUD overlay onto the GIF capture canvas for a frame
+function drawGifFrameWithHUD(gifCtx, srcCanvas, gifW, gifH, sample, progress01, playSpeed) {
+  // 1. Dark background & scaled 3D viewport
+  gifCtx.fillStyle = "#070a10";
+  gifCtx.fillRect(0, 0, gifW, gifH);
+  gifCtx.drawImage(srcCanvas, 0, 0, gifW, gifH);
+
+  // 2. Top-Left Title & Mode Banner
+  gifCtx.fillStyle = "rgba(8, 12, 20, 0.82)";
+  gifCtx.fillRect(8, 8, 330, 38);
+  gifCtx.strokeStyle = "rgba(0, 229, 255, 0.35)";
+  gifCtx.lineWidth = 1;
+  gifCtx.strokeRect(8, 8, 330, 38);
+
+  const runTag = chassis3DState.activeRun === "B" ? "RUN B (COMPARISON)" : "RUN A (BASELINE)";
+  const shaderTag = chassis3DState.heatMode === "temp" ? "TEMPERATURES (°C)" : "STRESS HOT-SPOTS (%)";
+  const modPreset = MODULE_CAMERA_TARGETS[chassis3DState.focusModule] || MODULE_CAMERA_TARGETS.all;
+
+  gifCtx.fillStyle = "#00e5ff";
+  gifCtx.font = "bold 11px Consolas, monospace";
+  gifCtx.textAlign = "left";
+  gifCtx.fillText(`STINGER GT 3.3T AWD • ${runTag} • ${playSpeed.toFixed(2)}x`, 14, 23);
+  gifCtx.fillStyle = "#94a3b8";
+  gifCtx.font = "10px Consolas, monospace";
+  gifCtx.fillText(`${shaderTag} • ${modPreset.label}`, 14, 38);
+
+  // 3. Top-Right Live Telemetry Readout Box
+  const boxW = 395;
+  const boxX = gifW - boxW - 8;
+  gifCtx.fillStyle = "rgba(8, 12, 20, 0.84)";
+  gifCtx.fillRect(boxX, 8, boxW, 38);
+  gifCtx.strokeStyle = "rgba(148, 163, 184, 0.35)";
+  gifCtx.strokeRect(boxX, 8, boxW, 38);
+
+  const phaseTag =
+    sample.t < 0
+      ? "BRAKE STALL"
+      : sample.shift
+      ? `SHIFT G${sample.gear}`
+      : sample.t < 0.35
+      ? "LAUNCH"
+      : `WOT GEAR ${sample.gear}`;
+
+  gifCtx.fillStyle = "#f8fafc";
+  gifCtx.font = "bold 11px Consolas, monospace";
+  gifCtx.fillText(
+    `t = ${sample.t >= 0 ? "+" : ""}${sample.t.toFixed(2)}s [${phaseTag}] | ${(sample.v_mph || 0).toFixed(1)} MPH | ${Math.round(sample.rpm || 0)} RPM`,
+    boxX + 8,
+    23
+  );
+  gifCtx.fillStyle = "#cbd5e1";
+  gifCtx.font = "10px Consolas, monospace";
+  gifCtx.fillText(
+    `${(sample.accel_g || 0).toFixed(2)}G • ${(sample.eng_nm || 0).toFixed(0)}Nm • Boost ${(sample.boost_psi || 0).toFixed(1)}psi • EMAP ${(sample.emap_psi || 0).toFixed(1)}psi • AWD ${(sample.awd_actual_nm || 0).toFixed(0)}Nm`,
+    boxX + 8,
+    38
+  );
+
+  // 4. Bottom Component Stress/Temp Strip + Run Timeline Progress Bar
+  const botH = 26;
+  const botY = gifH - botH;
+  gifCtx.fillStyle = "rgba(8, 12, 20, 0.88)";
+  gifCtx.fillRect(0, botY, gifW, botH);
+
+  gifCtx.font = "bold 10px Consolas, monospace";
+  gifCtx.fillStyle = "#e2e8f0";
+  const summaryLine =
+    `[1] V6: ${(sample.temp_egt_c || 0).toFixed(0)}°C (${(sample.stress_engine_pct || 0).toFixed(0)}%)  ` +
+    `[2] 8AT: ${(sample.temp_trans_c || 0).toFixed(1)}°C (${(sample.stress_trans_pct || 0).toFixed(0)}%)  ` +
+    `[5] AWD: ${(sample.temp_awd_c || 0).toFixed(1)}°C (${(sample.stress_awd_pct || 0).toFixed(0)}%)  ` +
+    `[3,4] Rear LSD: ${(sample.temp_rear_diff_c || 0).toFixed(1)}°C  ` +
+    `Tires R/F: ${(sample.temp_tire_r_c || 0).toFixed(1)}°/${(sample.temp_tire_f_c || 0).toFixed(1)}°C`;
+  gifCtx.fillText(summaryLine, 10, botY + 15);
+
+  // Timeline progress bar along bottom edge (0% at run start -> 100% at run finish)
+  gifCtx.fillStyle = "#1e293b";
+  gifCtx.fillRect(0, gifH - 4, gifW, 4);
+  gifCtx.fillStyle = "#00e5ff";
+  gifCtx.fillRect(0, gifH - 4, Math.round(gifW * Math.max(0, Math.min(1, progress01))), 4);
+}
+
+async function recordChassisRunToGif() {
+  const btn = document.getElementById("btnRecordChassisGif");
+  const canvas = document.getElementById("canvasChassis3D");
+  if (!btn || !canvas) return;
+
+  // Allow clicking again while recording to cancel cleanly
+  if (gifRecordingActive) {
+    gifRecordingAbort = true;
+    return;
+  }
+
+  const tel = getActiveChassisTelemetry();
+  if (!tel || tel.length < 2) {
+    alert("Run a simulation first before recording a 3D GIF.");
+    return;
+  }
+
+  // Stop live playback loop while recording deterministic frame sequence
+  chassis3DState.playing = false;
+  const btnPlay = document.getElementById("btnPlayTimeline");
+  if (btnPlay) btnPlay.innerHTML = "&#9654; PLAY RUN";
+
+  gifRecordingActive = true;
+  gifRecordingAbort = false;
+  btn.classList.add("recording");
+
+  // Lock camera goal to current camera so view remains anchored at user's chosen 3D angle
+  syncGoalToCurrentCamera();
+
+  // Determine exact frame cadence from #selPlaySpeed:
+  // Telemetry samples are spaced at dtSample = 0.02s (50 Hz).
+  //   2.00x Fast      -> sampleStride = 4 (dtSim = 0.08s), delayCs = 4 (40ms) -> 0.08 / 0.04 = 2.00x
+  //   1.00x Real-Time -> sampleStride = 2 (dtSim = 0.04s), delayCs = 4 (40ms) -> 0.04 / 0.04 = 1.00x
+  //   0.50x Analysis  -> sampleStride = 1 (dtSim = 0.02s), delayCs = 4 (40ms) -> 0.02 / 0.04 = 0.50x
+  //   0.25x Slow-Mo   -> sampleStride = 1 (dtSim = 0.02s), delayCs = 8 (80ms) -> 0.02 / 0.08 = 0.25x
+  const selSpeed = document.getElementById("selPlaySpeed");
+  const playSpeed = parseFloat(selSpeed?.value) || chassis3DState.playSpeed || 0.5;
+  chassis3DState.playSpeed = playSpeed;
+
+  let sampleStride = 1;
+  let delayCs = 4;
+  if (playSpeed >= 1.8) {
+    sampleStride = 4;
+    delayCs = 4;
+  } else if (playSpeed >= 0.9) {
+    sampleStride = 2;
+    delayCs = 4;
+  } else if (playSpeed >= 0.4) {
+    sampleStride = 1;
+    delayCs = 4;
+  } else {
+    sampleStride = 1;
+    delayCs = 8;
+  }
+
+  // Build exact frame index list locked to Beginning (idx = 0) and End (idx = tel.length - 1) of the run
+  const frameIndices = [];
+  for (let i = 0; i < tel.length; i += sampleStride) {
+    frameIndices.push(i);
+  }
+  if (frameIndices[frameIndices.length - 1] !== tel.length - 1) {
+    frameIndices.push(tel.length - 1);
+  }
+
+  // Offscreen composite canvas for GIF encoding (even dimensions for clean scaling)
+  const gifW = 800;
+  const gifH = 368;
+  const offCanvas = document.createElement("canvas");
+  offCanvas.width = gifW;
+  offCanvas.height = gifH;
+  const offCtx = offCanvas.getContext("2d", { willReadFrequently: true });
+
+  const { palette, lut } = buildChassisGifPaletteAndLUT();
+  const encoder = new Gif89aEncoder(gifW, gifH, palette);
+  const indexedBuf = new Uint8Array(gifW * gifH);
+
+  // Reset wheel rotation & airflow phase to start of run
+  chassis3DState.wheelAngleFront = 0;
+  chassis3DState.wheelAngleRear = 0;
+  chassis3DState.airflowPhase = 0;
+
+  const rng = document.getElementById("rngChassisTimeline");
+  const totalFrames = frameIndices.length;
+
+  try {
+    for (let f = 0; f < totalFrames; f++) {
+      if (gifRecordingAbort) break;
+
+      const idx = frameIndices[f];
+      const prevIdx = f > 0 ? frameIndices[f - 1] : idx;
+      const sample = tel[idx];
+      const dtSim = Math.max(0, sample.t - tel[prevIdx].t);
+
+      // Advance wheel rotation and airflow streamlines deterministically from simulation dt
+      const vfMs = (sample.v_wheel_f_kmh || 0) / 3.6;
+      const vrMs = (sample.v_wheel_r_kmh || 0) / 3.6;
+      chassis3DState.wheelAngleFront = (chassis3DState.wheelAngleFront + (vfMs / 0.334) * dtSim * 0.6) % (Math.PI * 2);
+      chassis3DState.wheelAngleRear = (chassis3DState.wheelAngleRear + (vrMs / 0.334) * dtSim * 0.6) % (Math.PI * 2);
+      chassis3DState.airflowPhase = (chassis3DState.airflowPhase + dtSim * (0.8 + (sample.v_mph || 0) * 0.025)) % 1.0;
+
+      // Render 3D scene and synchronize UI timeline cursor
+      chassis3DState.frameIdx = idx;
+      if (rng) rng.value = String(idx);
+      hoverTimeSec = sample.t;
+      updateCursorReadout(hoverTimeSec);
+      renderChassis3DScene();
+
+      // Composite 3D canvas + HUD banner onto offscreen GIF frame
+      const progress01 = totalFrames > 1 ? f / (totalFrames - 1) : 1.0;
+      drawGifFrameWithHUD(offCtx, canvas, gifW, gifH, sample, progress01, playSpeed);
+
+      // Quantize RGBA pixels to 8-bit palette indices via O(1) RGB555 LUT
+      const rgba = offCtx.getImageData(0, 0, gifW, gifH).data;
+      const nPx = gifW * gifH;
+      for (let p = 0, j = 0; p < nPx; p++, j += 4) {
+        const key555 = ((rgba[j] >> 3) << 10) | ((rgba[j + 1] >> 3) << 5) | (rgba[j + 2] >> 3);
+        indexedBuf[p] = lut[key555];
+      }
+
+      // Hold the final frame of the run for 1.0s (100 cs) before looping
+      const frameDelayCs = f === totalFrames - 1 ? 100 : delayCs;
+      encoder.addFrame(indexedBuf, frameDelayCs);
+
+      // Yield every 5 frames so browser updates live 3D viewport and button progress
+      if (f % 5 === 0 || f === totalFrames - 1) {
+        const pct = Math.round(((f + 1) / totalFrames) * 100);
+        btn.innerHTML = `&#9632; REC ${pct}% (${f + 1}/${totalFrames})`;
+        renderAllCharts();
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+
+    if (!gifRecordingAbort) {
+      const gifBytes = encoder.finish();
+      const blob = new Blob([gifBytes], { type: "image/gif" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const speedStr = `${playSpeed.toFixed(2)}x`;
+      const focusStr = chassis3DState.focusModule || "all";
+      a.href = url;
+      a.download = `stinger_3d_run${chassis3DState.activeRun}_${focusStr}_${chassis3DState.heatMode}_${speedStr}.gif`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    }
+  } finally {
+    gifRecordingActive = false;
+    gifRecordingAbort = false;
+    btn.classList.remove("recording");
+    btn.innerHTML = "&#9679; RECORD GIF";
+  }
+}
+

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Simulation Master — Tri-ECU Powertrain, 3D Stinger Chassis &amp; Longitudinal Physics Studio</title>
-  <link rel="stylesheet" href="styles.css?v=20261016_v3" />
+  <link rel="stylesheet" href="styles.css?v=20261016_v5" />
 </head>
 <body>
   <!-- TOP HEADER BAR WITH PAGE SWITCHER -->
@@ -185,11 +185,13 @@
             <!-- Interactive Timeline Scrubber & Playback Controls -->
             <div class="chassis-timeline-bar">
               <button type="button" id="btnPlayTimeline" class="btn btn-primary btn-sm">&#9654; PLAY RUN</button>
-              <select id="selPlaySpeed" class="chassis-select">
+              <select id="selPlaySpeed" class="chassis-select" title="Playback &amp; GIF Recording Frame Cadence">
                 <option value="0.25">0.25&times; Slow-Mo</option>
                 <option value="0.5" selected>0.50&times; Analysis</option>
                 <option value="1.0">1.00&times; Real-Time</option>
+                <option value="2.0">2.00&times; Fast</option>
               </select>
+              <button type="button" id="btnRecordChassisGif" class="btn btn-gif-rec btn-sm" title="Record entire 3D run from start to finish into an animated GIF at the selected speed cadence">&#9679; RECORD GIF</button>
               <div class="timeline-slider-wrap">
                 <div class="timeline-label-row">
                   <span id="lblTimelineSec">t = 0.00 s (LAUNCH)</span>
@@ -947,6 +949,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20261016_v4"></script>
+  <script src="app.js?v=20261016_v5"></script>
 </body>
 </html>
