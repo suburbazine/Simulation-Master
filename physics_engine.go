@@ -431,16 +431,16 @@ func evalTurboAndExhaustDynamics(cfg RunConfig, rpm, targetBoostHpa, curBoostHpa
 		exhSpoolMult = 1.00
 	}
 
-	// Normalized engine exhaust mass flow factor (1.0 = 6000 RPM @ 2717 hPa / 24.7 psi)
-	mDotNorm := math.Max(0.05, (rpm/6000.0)*(curBoostHpa/2717.0))
+	// Normalized engine exhaust mass flow factor (1.0 = 6000 RPM @ 2235 hPa / 1400 mg/stk reference)
+	mDotNorm := math.Max(0.05, (rpm/6000.0)*(curBoostHpa/2235.0))
 
 	// Post-turbine exhaust backpressure (psi gauge)
 	exhBackpressurePsi := kExhPsi * math.Pow(mDotNorm, 1.82)
 
 	// 3. Compressor Inducer Mass-Flow Choke Ceiling & Adiabatic Efficiency
-	// On OEM 37.2mm inducers, mass flow begins approaching choke above ~5400 RPM at >22.5 psi
-	highRPMFactor := math.Max(0.0, (rpm-5000.0)/1600.0)
-	maxSupportedBoostPsi := (26.5 - 5.2*highRPMFactor) * compInAreaRatio
+	// On OEM 37.2mm inducers, mass flow begins approaching choke above ~5000 RPM at >21.5 psi
+	highRPMFactor := math.Max(0.0, (rpm-4800.0)/1600.0)
+	maxSupportedBoostPsi := (23.8 - 4.8*highRPMFactor) * compInAreaRatio
 	// Larger compressor exducer also raises peak pressure ratio capability
 	maxSupportedBoostPsi *= (0.75 + 0.25*compExDiaRatio)
 	chokeBoostCapHpa := ambientHpa + math.Max(8.0, maxSupportedBoostPsi)/0.0145038
@@ -927,10 +927,8 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 			}
 
 			// 4b. Turbocharger Boost, Dual-CVVT Cam Phasing & Airload Dynamics
-			targetBoostHpa := ecu.PutSpMaxHpa
-			if ecu.BoostLimitAHpa < targetBoostHpa && ecu.BoostLimitAHpa > 1200 {
-				targetBoostHpa = ecu.BoostLimitAHpa
-			}
+			// Evaluate RPM-dependent SIM2K-260 boost target from 0x23D810 (M_AIR_CYL_MAX), 0x21DA7C (PUT_SP), and 0x21EB38 (IP_PQ_CHA_MAX)
+			targetBoostHpa := EvalECUBoostTargetHpa(ecu, engineRPM, ambientHpa)
 			// Scale boost/airflow by user TorqueScalePct override and direct BoostAdderPsi (+1 psi = 68.9476 hPa)
 			targetBoostHpa = ambientHpa + (targetBoostHpa-ambientHpa)*(cfg.Overrides.TorqueScalePct/100.0) + cfg.Overrides.BoostAdderPsi*68.9476
 			targetBoostHpa = math.Max(ambientHpa, math.Min(3600.0, targetBoostHpa))
@@ -949,8 +947,9 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 			etaComp = turboExh.CompEfficiency
 
 			// Spool capability as a function of RPM, wheel inertia boost threshold, & pre-stage brake-stand / RAL antilag
+			// Correlated to PandaCapture WOT logs (2500 RPM -> 3450 RPM full spool ramp on twin MGT1549DSL)
 			effSpoolRPM := engineRPM - turboExh.SpoolRPMOffset
-			spoolFactor := math.Min(1.0, math.Max(0.15, (effSpoolRPM-1100.0)/1650.0))
+			spoolFactor := math.Min(1.0, math.Max(0.18, (effSpoolRPM-1250.0)/2200.0))
 			if tSec < 0 {
 				if ralActive {
 					spoolFactor = 1.0 // Rolling/Stationary Antilag builds 100% boost target on the line
@@ -970,6 +969,7 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 			boostHpa += (0.01 / tauSpool) * (achievableBoostHpa - boostHpa)
 
 			// Convert manifold pressure + Dual-CVVT VE + Turbo/Exhaust VE + fuel/compressor thermal density to cylinder air charge (mg/stk)
+			// Ideal-gas cylinder filling on 3.342L V6 (557.0 cc/cyl): 0.6264 mg/stk per hPa (2235.0 hPa = 1400.0 mg/stk, 2155.0 hPa = 1350.0 mg/stk)
 			ve := 0.90
 			if engineRPM >= 2000 && engineRPM <= 5400 {
 				ve = 1.00
@@ -980,7 +980,7 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 			fmicHeatSoakC := math.Max(0.0, tempIATC-env.AmbientTempC-14.0)
 			effChargeTempK := math.Max(250.0, tAmbK-fuelSpec.LatentChargeCoolC+turboExh.CompTempPenaltyC+0.60*fmicHeatSoakC)
 			tempDensityFactor := 293.15 / effChargeTempK
-			airloadMg = (boostHpa / 2717.0) * 1350.0 * ve * tempDensityFactor
+			airloadMg = boostHpa * 0.6264 * ve * tempDensityFactor
 
 			// 4c. Forward Torque Lookup (0x255518 TQI_BAS & 0x253D14.. TQI_MAX)
 			tqiBas := Interp2D(ecu.FwdRPM, ecu.FwdAir, ecu.TQIBasA, engineRPM, airloadMg)
@@ -1387,12 +1387,14 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 			// During inertia-phase upshift, oncoming clutch packs absorb kinetic energy + un-cut engine torque
 			// When Shift Spark Floor (0x207AD9) blocks the torque cut, clutch pack thermal dissipation spikes dramatically
 			uncutRatio := actualEngNm / math.Max(150.0, tqiUncappedNm)
-			shiftClutchSlipKW = 28.0 + 0.145*actualEngNm*(0.5+1.8*uncutRatio)
+			shiftClutchSlipKW = 32.0 + 0.175*actualEngNm*(0.4+2.4*uncutRatio*uncutRatio)
 		}
 		tcSlipPowerKW = tcHydroSlipKW + shiftClutchSlipKW
-		// ATF thermal mass integration (~16 kJ/C effective localized fluid + clutch housing thermal capacity)
-		transHeatDegPerS := tcSlipPowerKW / 14.5
-		transCoolDegPerS := airflowFactor * 0.048 * math.Max(0.0, tempTransC-75.0)
+		// ATF thermal mass integration (~14 kJ/C effective localized fluid + clutch housing thermal capacity)
+		// Includes front auxiliary air-to-oil cooler rejection + radiator end-tank heat exchanger coupling
+		radiatorEndTankHeatDegPerS := 0.035 * math.Max(0.0, tempEngineC-85.0) * (1.0 - 0.5*airflowFactor)
+		transHeatDegPerS := (tcSlipPowerKW / 13.5) + radiatorEndTankHeatDegPerS
+		transCoolDegPerS := airflowFactor * 0.135 * math.Max(0.0, tempTransC-72.0)
 		tempTransC += (transHeatDegPerS - transCoolDegPerS) * dt
 
 		// 6c. Magna ATC Active AWD Wet Multi-Plate Transfer Clutch Slip & Thermal Load
@@ -1770,8 +1772,8 @@ func GetScenarioPresets(ecuBins, tcuBins, awdBins []BinFileItem) []ScenarioPrese
 			ID:          "stock_vs_trifecta",
 			Name:        "1. Stock Baseline vs. Full ECU + EKM TCU + SportLaunch AWD Trifecta",
 			Category:    "Full Calibration Comparison",
-			Description: "Compares 100% stock SIM2K-260 (Q) + Stock CPTSH 8AT + Stock Magna AWD against IntensePop v103 (+14% boost) + EKM 8AT (3500 stall / 700 Nm / 90ms shift) + SportLaunch 30mph AWD (brake-gate bypass + 9000 Nm/s).",
-			Highlight:   "Shows how unlocking TCU torque caps (0x1FD198), raising brake-stall to 3500 RPM (0x238B68), and bypassing the AWD 64.5 psi brake gate (0xC06080) transforms 60-ft, 0-60 mph, and 1/4-mile performance.",
+			Description: "Compares SIM2K-260 (Q: 1400 mg/stk / 17.7 psi) + Stock CPTSH 8AT + Stock Magna AWD against IntensePop v103 (1550 mg/stk / 21.2 psi) + EKM 8AT (3500 stall / 700 Nm / 90ms shift) + SportLaunch 30mph AWD (brake-gate bypass + 9000 Nm/s).",
+			Highlight:   "Shows how raising M_AIR_CYL_MAX (0x23D810) & PUT_SP (0x21DA7C), unlocking TCU torque caps (0x1FD198), raising brake-stall to 3500 RPM (0x238B68), and bypassing the AWD 64.5 psi brake gate (0xC06080) transforms 60-ft, 0-60 mph, and 1/4-mile performance.",
 			Environment: EnvironmentConfig{
 				SurfaceID:       "dry_warm",
 				AmbientTempC:    20,
@@ -1806,7 +1808,7 @@ func GetScenarioPresets(ecuBins, tcuBins, awdBins []BinFileItem) []ScenarioPrese
 				BrakeHoldPsi:    1200,
 				BrakeReleaseMs:  140,
 				PedalPct:        100,
-				Overrides:       OverrideConfig{TorqueScalePct: 114, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
+				Overrides:       OverrideConfig{TorqueScalePct: 100, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
 			},
 		},
 		{
@@ -1836,7 +1838,7 @@ func GetScenarioPresets(ecuBins, tcuBins, awdBins []BinFileItem) []ScenarioPrese
 				BrakeHoldPsi:    1200,
 				BrakeReleaseMs:  140,
 				PedalPct:        100,
-				Overrides:       OverrideConfig{TorqueScalePct: 112, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
+				Overrides:       OverrideConfig{TorqueScalePct: 100, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
 			},
 			RunB: RunConfig{
 				Label:           "Run B: SportLaunch 30mph AWD (Pre-Staged + 9000 Nm/s)",
@@ -1849,7 +1851,7 @@ func GetScenarioPresets(ecuBins, tcuBins, awdBins []BinFileItem) []ScenarioPrese
 				BrakeHoldPsi:    1200,
 				BrakeReleaseMs:  140,
 				PedalPct:        100,
-				Overrides:       OverrideConfig{TorqueScalePct: 112, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
+				Overrides:       OverrideConfig{TorqueScalePct: 100, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
 			},
 		},
 		{
@@ -1879,7 +1881,7 @@ func GetScenarioPresets(ecuBins, tcuBins, awdBins []BinFileItem) []ScenarioPrese
 				BrakeHoldPsi:    1200,
 				BrakeReleaseMs:  130,
 				PedalPct:        100,
-				Overrides:       OverrideConfig{TorqueScalePct: 114, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
+				Overrides:       OverrideConfig{TorqueScalePct: 100, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
 			},
 			RunB: RunConfig{
 				Label:           "Run B: KimJongTuned BEF (+12.0° Shift Floor / High Spark)",
@@ -1892,7 +1894,7 @@ func GetScenarioPresets(ecuBins, tcuBins, awdBins []BinFileItem) []ScenarioPrese
 				BrakeHoldPsi:    1200,
 				BrakeReleaseMs:  130,
 				PedalPct:        100,
-				Overrides:       OverrideConfig{TorqueScalePct: 114, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
+				Overrides:       OverrideConfig{TorqueScalePct: 100, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
 			},
 		},
 		{
@@ -1922,7 +1924,7 @@ func GetScenarioPresets(ecuBins, tcuBins, awdBins []BinFileItem) []ScenarioPrese
 				BrakeHoldPsi:    1200,
 				BrakeReleaseMs:  130,
 				PedalPct:        100,
-				Overrides:       OverrideConfig{TorqueScalePct: 112, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
+				Overrides:       OverrideConfig{TorqueScalePct: 100, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
 			},
 			RunB: RunConfig{
 				Label:           "Run B: IntensePop v103 (TCHA Limiter Disabled)",
@@ -1935,14 +1937,14 @@ func GetScenarioPresets(ecuBins, tcuBins, awdBins []BinFileItem) []ScenarioPrese
 				BrakeHoldPsi:    1200,
 				BrakeReleaseMs:  130,
 				PedalPct:        100,
-				Overrides:       OverrideConfig{TorqueScalePct: 112, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
+				Overrides:       OverrideConfig{TorqueScalePct: 100, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
 			},
 		},
 		{
 			ID:          "ral_drag_launch",
 			Name:        "5. VHT Drag Strip Launch: RALv1 Antilag Patch (0x808DC000) vs. Standard Stall",
 			Category:    "Drag Strip Launch",
-			Description: "Compares normal converter brake-stall against the RALv1 antilag binary (0x808DC000 code cave building full 2717 hPa manifold pressure on the line) on VHT prepped rubber (mu=1.35).",
+			Description: "Compares normal converter brake-stall against the RALv1 antilag binary (0x808DC000 code cave building full 2395 hPa / 20.0 psi manifold pressure on the line) on VHT prepped rubber (mu=1.35).",
 			Highlight:   "Demonstrates instant 1.15G+ 60-ft launch acceleration when leaving the line at full boost with SportLaunch AWD pre-staged.",
 			Environment: EnvironmentConfig{
 				SurfaceID:       "drag_vht",
@@ -1966,7 +1968,7 @@ func GetScenarioPresets(ecuBins, tcuBins, awdBins []BinFileItem) []ScenarioPrese
 				BrakeReleaseMs:  110,
 				PedalPct:        100,
 				RolloutInch:     12,
-				Overrides:       OverrideConfig{TorqueScalePct: 118, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
+				Overrides:       OverrideConfig{TorqueScalePct: 100, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
 			},
 			RunB: RunConfig{
 				Label:           "Run B: RALv1 Antilag Patch (Full Boost on Line)",
@@ -1980,7 +1982,7 @@ func GetScenarioPresets(ecuBins, tcuBins, awdBins []BinFileItem) []ScenarioPrese
 				BrakeReleaseMs:  110,
 				PedalPct:        100,
 				RolloutInch:     12,
-				Overrides:       OverrideConfig{TorqueScalePct: 118, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
+				Overrides:       OverrideConfig{TorqueScalePct: 100, ShiftCutScalePct: 100, FrontSplitScalePct: 100},
 			},
 		},
 	}

@@ -17,8 +17,8 @@ func TestPowertrain33TSpec(t *testing.T) {
 	if spec.Engine.AirChargeLSB != 0.04238956 {
 		t.Errorf("Expected 0.04238956 mg/stk/LSB, got %f", spec.Engine.AirChargeLSB)
 	}
-	if spec.Engine.PutSpMaxHpa != 2717.0 {
-		t.Errorf("Expected PUT_SP 2717.0 hPa, got %f", spec.Engine.PutSpMaxHpa)
+	if spec.Engine.PutSpMaxHpa != 2235.0 {
+		t.Errorf("Expected PUT_SP 2235.0 hPa, got %f", spec.Engine.PutSpMaxHpa)
 	}
 
 	// Verify A8LR1 gear ratios and reflected inertias

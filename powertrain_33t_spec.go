@@ -246,8 +246,8 @@ func GetStingerG70PlatformSpec() Platform33TSpec {
 		AirChargeLSB:      0.04238956,
 		ManifoldVolLiters: 4.85,
 		NominalVEPeak:     1.00,
-		PutSpMaxHpa:       2717.0,
-		BoostLimitAHpa:    2717.0,
+		PutSpMaxHpa:       2235.0,
+		BoostLimitAHpa:    2500.0,
 
 		FricPolyC0: 34.0,
 		FricPolyC1: 0.0045,
@@ -258,7 +258,7 @@ func GetStingerG70PlatformSpec() Platform33TSpec {
 	spec.Engine.MapAddrs.DriverDemandMode4 = "0x214760"
 	spec.Engine.MapAddrs.GearTorqueFactor = "0x213B70"
 	spec.Engine.MapAddrs.SpeedTorqueFactor = "0x215150"
-	spec.Engine.MapAddrs.BoostTargetPUT = "0x21EC00"
+	spec.Engine.MapAddrs.BoostTargetPUT = "0x23D810 / 0x21DA7C / 0x21EB38"
 	spec.Engine.MapAddrs.BoostLimitA = "0x21F478"
 	spec.Engine.MapAddrs.TCHATurboLimiter = "0x203EC6"
 	spec.Engine.MapAddrs.TCHAMinTorque = "0x203ED4"

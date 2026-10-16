@@ -331,3 +331,77 @@ func TestChassisStressAndThermalModeling(t *testing.T) {
 		t.Fatalf("Expected higher PeakStressAWDPct under staggered tire slip (%.1f%% vs %.1f%%)", ss.PeakStressAWDPct, sn.PeakStressAWDPct)
 	}
 }
+
+func TestPandaCaptureBoostCorrelation(t *testing.T) {
+	ecuBins, tcuBins, awdBins := DiscoverBinaries()
+	if len(ecuBins) == 0 || len(tcuBins) == 0 || len(awdBins) == 0 {
+		t.Skip("no binaries discovered")
+	}
+
+	env := EnvironmentConfig{
+		SurfaceID:       "dry_warm",
+		AmbientTempC:    20,
+		CoolantTempC:    85,
+		VehicleMassKg:   1915,
+		FrontTireRadius: 0.334,
+		RearTireRadius:  0.334,
+		SimDurationSec:  12.0,
+	}
+
+	for i := 0; i < len(ecuBins) && i < 6; i++ {
+		bin := ecuBins[i]
+		prof, err := DecodeECUProfile(bin.Path)
+		if err != nil {
+			t.Fatalf("DecodeECUProfile(%s) failed: %v", bin.Filename, err)
+		}
+		sp3500 := EvalECUBoostTargetHpa(prof, 3500, 1013.25)
+		sp4500 := EvalECUBoostTargetHpa(prof, 4500, 1013.25)
+		sp5500 := EvalECUBoostTargetHpa(prof, 5500, 1013.25)
+		sp6000 := EvalECUBoostTargetHpa(prof, 6000, 1013.25)
+
+		run := RunConfig{
+			Label:           bin.Filename,
+			ECUBinPath:      bin.Path,
+			TCUBinPath:      tcuBins[0].Path,
+			AWDBinPath:      awdBins[0].Path,
+			DriveMode:       "sport",
+			ESCMode:         "sport",
+			PreStageTimeSec: 1.4,
+			BrakeHoldPsi:    1200,
+			BrakeReleaseMs:  130,
+			PedalPct:        100,
+			Overrides:       OverrideConfig{TorqueScalePct: 100},
+		}
+		resp, err := ExecuteSimulation(SimRequest{Environment: env, RunA: run})
+		if err != nil {
+			t.Fatalf("ExecuteSimulation(%s) failed: %v", bin.Filename, err)
+		}
+		maxBoostPsi := 0.0
+		maxAirload := 0.0
+		for _, s := range resp.RunA.Telemetry {
+			if s.TimeSec >= 0.2 {
+				if s.BoostPsi > maxBoostPsi {
+					maxBoostPsi = s.BoostPsi
+				}
+				if s.AirloadMgStk > maxAirload {
+					maxAirload = s.AirloadMgStk
+				}
+			}
+		}
+
+		t.Logf("%-44s | PutSpMax=%.0f hPa (%.1f psi) | SP(3.5k/4.5k/5.5k/6k)=%.1f/%.1f/%.1f/%.1f psi | SimPeakBoost=%.1f psi | SimPeakAirload=%.0f mg/stk",
+			bin.Filename,
+			prof.PutSpMaxHpa, (prof.PutSpMaxHpa-1013.25)*0.0145038,
+			(sp3500-1013.25)*0.0145038,
+			(sp4500-1013.25)*0.0145038,
+			(sp5500-1013.25)*0.0145038,
+			(sp6000-1013.25)*0.0145038,
+			maxBoostPsi, maxAirload)
+
+		// Verify the old bogus 2717.0 hPa (24.7 psi) is completely gone
+		if prof.PutSpMaxHpa > 2600.0 {
+			t.Fatalf("Bogus >2600 hPa boost target still present on %s: %.1f hPa", bin.Filename, prof.PutSpMaxHpa)
+		}
+	}
+}
+

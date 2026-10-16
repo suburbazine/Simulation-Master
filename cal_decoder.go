@@ -51,12 +51,24 @@ type ECUProfile struct {
 	InvTq      []float64   // 20 pts (20..750 Nm)
 	MAFSpHigh  [][]float64 // 0x25965C (18x20 mg/stk)
 
-	// Clutch / TCU Protection Cap in ECU
-	ClutchLimitNm float64 // 0x24CE7C
+	// Maximum Cylinder Air Charge & Boost Setpoint Chain (0x8016AC20 -> 0x80136F84 -> 0x800F3CB8 -> 0x800F5DA4)
+	MaxCylAirRPM      []float64   // 0x23D5DE (12 RPM pts: 1300..6700)
+	MaxCylAirMg       []float64   // 0x23D810 M_AIR_CYL_MAX (12 pts mg/stk: 1110..1020 Stock/BEF, 1400 Q, 1500 Loud/RAL, 1550 v103)
+	PutSpRPM          []float64   // 0x203988 (6 RPM pts: 2000..6500)
+	PutSpCurveHpa     []float64   // 0x21DA7C top col (6 pts hPa: 2155 Q/BEF, 2400 Loud/RAL/v103, 2300..2619 KJT)
+	PutSpTablePeakHpa float64     // Peak of 0x21DA7C top col
+	CompPQRPM         []float64   // 0x21EAC6 (8 RPM pts: 2000..6500)
+	CompPQGrid        [][]float64 // 0x21EB38 IP_PQ_CHA_MAX (8 IAT x 8 RPM compressor pressure ratio limit)
+	CompPQWarmCurve   []float64   // 0x21EB38 row 5 (30C IAT warm pressure ratio curve)
+	CompPQMax         float64     // Peak of 0x21EB38
+
+	// Basic Lambda Setpoint & Torque Protection Cap
+	LambdaSetptMin float64 // 0x24CE7C (16x16 Q14 basic lambda setpoint min at WOT)
+	ClutchLimitNm  float64 // Effective ECU torque ceiling (0x253D14 TQIMaxPeak)
 
 	// Boost & TCHA Turbo Speed Limiter
-	PutSpMaxHpa       float64 // 0x21EC00 peak
-	BoostLimitAHpa    float64 // 0x21F478 peak
+	PutSpMaxHpa       float64 // Effective WOT MAP/PUT peak target (hPa) from SIM2K-260 air-path chain
+	BoostLimitAHpa    float64 // 0x21F478 CAP_H overboost diagnosis ceiling (hPa)
 	TCHALimitActive   bool    // 0x203EC6 != 65535
 	TCHADebounceCyc   int     // 0x203EC6 (10 cycles in Loud vs 65535 in Q)
 	TCHAMinTorqueNm   float64 // 0x203ED4 (200 Nm in Loud)
@@ -176,6 +188,8 @@ func DiscoverBinaries() ([]BinFileItem, []BinFileItem, []BinFileItem) {
 		{`C:\Google Antigravity\BinGo-Master`, ""},
 		{`C:\Google Antigravity\Kia SIM2K-260`, ""},
 		{`C:\Google Antigravity\Kia SIM2K-260\Claude_Bins`, ""},
+		{`C:\Claude Projects\Kia SIM2K-260`, ""},
+		{`C:\Claude Projects\Kia SIM2K-260\Claude_Bins`, ""},
 		{`C:\Claude Projects\Kefico CPTSH\out`, ""},
 		{`C:\Claude Projects\TCU Bins`, ""},
 	}
@@ -595,13 +609,56 @@ func DecodeECUProfile(binPath string) (*ECUProfile, error) {
 	p.InvTq = readArrayU16LE(data, 0x2554EE, 20, 0.03125, 0.0)
 	p.MAFSpHigh, _ = readGridU16LE(data, 0x25965C, 18, 20, airScale, 0.0)
 
-	// 5. Clutch / TCU Torque Protection Cap in ECU (0x24CE7C, 16x16)
-	_, p.ClutchLimitNm = readGridU16LE(data, 0x24CE7C, 16, 16, 0.03125, 0.0)
+	// 5. Basic Lambda Setpoint (0x24CE7C, 16x16 Q14) & ECU Torque Protection Ceiling
+	// Note: 0x24CE7C is basic lambda setpoint (X / 16384.0), whereas the ECU torque ceiling is TQIMaxPeak (0x253D14..).
+	lambdaGrid, _ := readGridU16LE(data, 0x24CE7C, 16, 16, 1.0/16384.0, 0.0)
+	minLambda := 1.0
+	for r := 0; r < 16; r++ {
+		for c := 0; c < 16; c++ {
+			if lambdaGrid[r][c] > 0.5 && lambdaGrid[r][c] < minLambda {
+				minLambda = lambdaGrid[r][c]
+			}
+		}
+	}
+	p.LambdaSetptMin = minLambda
+	p.ClutchLimitNm = p.TQIMaxPeak
 
-	// 6. Boost & TCHA Turbo Speed Limiter
+	// 6. SIM2K-260 Airload Ceiling & Boost Setpoint Chain (0x8016AC20 -> 0x80136F84 -> 0x800F3CB8 -> 0x800F5DA4)
+	//Note: 0x21EC00 is a Q15 unity weighting factor (32768 = 1.0), NOT a 2717 hPa boost target (see xdf_audit.md Item 15).
 	const hpaScale = 0.082917525
-	_, p.PutSpMaxHpa = readGridU16LE(data, 0x21EC00, 6, 6, hpaScale, 0.0)
+	// 6a. Maximum Cylinder Air Charge vs RPM: 0x23D810 (M_AIR_CYL_MAX, 12 pts, axis at 0x23D5DE)
+	p.MaxCylAirRPM = readArrayU16LE(data, 0x23D5DE, 12, 1.0, 0.0)
+	p.MaxCylAirMg = readArrayU16LE(data, 0x23D810, 12, airScale, 0.0)
+
+	// 6b. Pressure Upstream Throttle Setpoint vs RPM: 0x21DA7C (6 RPM x 4 Pressure, axis at 0x203988)
+	p.PutSpRPM = readArrayU16LE(data, 0x203988, 6, 1.0, 0.0)
+	putGrid, putPeak := readGridU16LE(data, 0x21DA7C, 6, 4, hpaScale, 0.0)
+	p.PutSpCurveHpa = make([]float64, 6)
+	for r := 0; r < 6; r++ {
+		p.PutSpCurveHpa[r] = putGrid[r][3] // Top column (col 3) is active WOT setpoint
+	}
+	p.PutSpTablePeakHpa = putPeak
+
+	// 6c. Maximum Allowed Compressor Pressure Quotient: 0x21EB38 (IP_PQ_CHA_MAX, 8 IAT x 8 RPM, Q12 = 1/4096, axis at 0x21EAC6)
+	p.CompPQRPM = readArrayU16LE(data, 0x21EAC6, 8, 1.0, 0.0)
+	p.CompPQGrid, p.CompPQMax = readGridU16LE(data, 0x21EB38, 8, 8, 1.0/4096.0, 0.0)
+	p.CompPQWarmCurve = make([]float64, 8)
+	for c := 0; c < 8; c++ {
+		p.CompPQWarmCurve[c] = p.CompPQGrid[5][c] // Row 5 = 30C IAT warm operating row
+	}
+
+	// 6d. Overboost Diagnosis Ceiling CAP_H: 0x21F478 (6x6, hpaScale)
 	_, p.BoostLimitAHpa = readGridU16LE(data, 0x21F478, 6, 6, hpaScale, 0.0)
+
+	// Compute peak WOT boost target across 2500..6000 RPM at standard sea-level ambient (1013.25 hPa)
+	peakWotBoostHpa := 0.0
+	for _, testRPM := range []float64{2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000} {
+		bHpa := EvalECUBoostTargetHpa(p, testRPM, 1013.25)
+		if bHpa > peakWotBoostHpa {
+			peakWotBoostHpa = bHpa
+		}
+	}
+	p.PutSpMaxHpa = peakWotBoostHpa
 
 	p.TCHADebounceCyc = int(readU16LE(data, 0x203EC6))
 	p.TCHAMinTorqueNm = float64(readU16LE(data, 0x203ED4)) * 0.03125
@@ -647,6 +704,59 @@ func DecodeECUProfile(binPath string) (*ECUProfile, error) {
 
 	return p, nil
 }
+
+// EvalECUBoostTargetHpa evaluates the SIM2K-260 WOT manifold/charge-pipe pressure setpoint (hPa) at a given RPM.
+// Traces the exact TriCore firmware chain:
+//  1. 0x8016AC20 -> 0x23D810 (M_AIR_CYL_MAX vs RPM)
+//  2. 0x80136F84 -> Ideal-gas cylinder filling conversion (0.6264 mg/stk per hPa for 557 cc/cyl at 20C)
+//  3. 0x800F3CB8 -> 0x21DA7C (PUT_SP vs RPM) and 0x21EB38 (IP_PQ_CHA_MAX compressor pressure quotient ceiling)
+func EvalECUBoostTargetHpa(ecu *ECUProfile, rpm, ambientHpa float64) float64 {
+	if ambientHpa <= 500.0 {
+		ambientHpa = 1013.25
+	}
+	mAirCapMg := Interp1D(ecu.MaxCylAirRPM, ecu.MaxCylAirMg, rpm)
+	if mAirCapMg <= 200.0 {
+		mAirCapMg = 1400.0
+	}
+	putDa7cHpa := Interp1D(ecu.PutSpRPM, ecu.PutSpCurveHpa, rpm)
+	if putDa7cHpa <= 800.0 {
+		putDa7cHpa = 2155.0
+	}
+	pqMax := Interp1D(ecu.CompPQRPM, ecu.CompPQWarmCurve, rpm)
+	if pqMax <= 1.2 {
+		pqMax = 3.05
+	}
+
+	// Twin-MGT1549DSL natural volumetric / turbine backpressure taper above 4500 RPM (verified in PandaCapture logs)
+	highRpmTaper := 1.0
+	if rpm > 4500.0 {
+		highRpmTaper = 1.0 - 0.055*math.Min(1.35, (rpm-4500.0)/1500.0)
+	}
+
+	// If 0x21DA7C is tapered at high RPM (e.g. v101/v103/RALv1: 2400 -> 2350 -> 2240 -> 2155 hPa),
+	// blend the high-RPM PUT_SP shape into the air-based pressure target
+	da7cShape := 1.0
+	if rpm > 4000.0 && ecu.PutSpTablePeakHpa > 2160.0 {
+		da7cShape = math.Min(1.0, putDa7cHpa/ecu.PutSpTablePeakHpa)
+	}
+
+	// Ideal-gas cylinder filling on 3.342L V6 (557.0 cc/cyl): 0.6264 mg/stk per hPa (1400 mg/stk = 2235.0 hPa = 17.7-18.2 psi)
+	pFromAirHpa := (mAirCapMg / 0.6264) * highRpmTaper * (0.35 + 0.65*da7cShape)
+	// Also honor direct 0x21DA7C PUT_SP table (0.923 * 2155 hPa = 1989 hPa = 14.2 psi stock 3.3T target; 2300..2619 hPa in KJT standalone)
+	pFromDa7cHpa := putDa7cHpa * 0.923 * highRpmTaper
+	pTargetHpa := math.Max(pFromAirHpa, pFromDa7cHpa)
+
+	// Clamp by compressor pressure quotient 0x21EB38 (accounting for air cleaner + intercooler + throttle pressure drop)
+	pCompCapHpa := ambientHpa * (pqMax * 0.78)
+	pMapHpa := math.Min(pTargetHpa, pCompCapHpa)
+
+	// Clamp by 0x21F478 (CAP_H overboost threshold) if active
+	if ecu.BoostLimitAHpa > 1200.0 && ecu.BoostLimitAHpa < 3500.0 {
+		pMapHpa = math.Min(pMapHpa, ecu.BoostLimitAHpa)
+	}
+	return math.Max(ambientHpa, pMapHpa)
+}
+
 
 // DecodeTCUProfile reads a Kefico CPTSH 8AT binary (Big-Endian) and extracts shift, stall, and torque tables.
 func DecodeTCUProfile(binPath string) (*TCUProfile, error) {
