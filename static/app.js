@@ -1690,7 +1690,7 @@ function setupChassis3DStudio() {
     const dy = e.clientY - chassis3DState.lastMouseY;
     chassis3DState.lastMouseX = e.clientX;
     chassis3DState.lastMouseY = e.clientY;
-    chassis3DState.yaw += dx * 0.0085;
+    chassis3DState.yaw -= dx * 0.0085;
     chassis3DState.pitch = Math.max(-1.25, Math.min(1.52, chassis3DState.pitch + dy * 0.0075));
     chassis3DState.goalYaw = chassis3DState.yaw;
     chassis3DState.goalPitch = chassis3DState.pitch;

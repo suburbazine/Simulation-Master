@@ -7,10 +7,20 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 )
 
 //go:embed static/*
 var staticFiles embed.FS
+
+func noCacheStaticHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
+		next.ServeHTTP(w, r)
+	})
+}
 
 func main() {
 	port := flag.Int("port", 8085, "HTTP server port for Simulation Master")
@@ -47,11 +57,17 @@ func main() {
 	mux.HandleFunc("/api/storage", handleStorageStatus)
 	mux.HandleFunc("/api/import", handleImportFiles)
 
-	staticSub, err := fs.Sub(staticFiles, "static")
-	if err != nil {
-		log.Fatalf("Failed to mount embedded static filesystem: %v", err)
+	var fileServer http.Handler
+	if info, err := os.Stat("static"); err == nil && info.IsDir() {
+		fileServer = http.FileServer(http.Dir("static"))
+	} else {
+		staticSub, err := fs.Sub(staticFiles, "static")
+		if err != nil {
+			log.Fatalf("Failed to mount embedded static filesystem: %v", err)
+		}
+		fileServer = http.FileServer(http.FS(staticSub))
 	}
-	mux.Handle("/", http.FileServer(http.FS(staticSub)))
+	mux.Handle("/", noCacheStaticHandler(fileServer))
 
 	addr := fmt.Sprintf(":%d", *port)
 	if err := http.ListenAndServe(addr, mux); err != nil {
