@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Simulation Master — Tri-ECU Powertrain & Longitudinal Physics Studio</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- TOP HEADER BAR -->
+  <header class="topbar">
+    <div class="brand-block">
+      <div class="brand-logo">SM</div>
+      <div>
+        <h1 class="brand-title">SIMULATION MASTER <span class="brand-sub">v1.0</span></h1>
+        <div class="brand-caption">SIM2K-260 (TC1791) &bull; Kefico CPTSH 8AT (SH72549R) &bull; Magna ATC AWD (C166)</div>
+      </div>
+    </div>
+
+    <div class="db-status-bar" id="dbStatusBar">
+      <!-- Populated dynamically with SQLite DB badges -->
+    </div>
+
+    <div class="preset-bar">
+      <button id="btnOpenImportModal" class="btn btn-import" title="Open Browser File Picker to import .DB or .BIN files into local storage/ folder tree">
+        &#128194; IMPORT DB / BIN
+      </button>
+      <label for="presetSelect" class="preset-label">SCENARIO PRESET:</label>
+      <select id="presetSelect" class="preset-select"></select>
+      <button id="btnRunSim" class="btn btn-primary" title="Run 1ms Closed-Loop Physics & Firmware Emulation">
+        &#9654; RUN A/B EMULATION
+      </button>
+      <button id="btnSwapAB" class="btn btn-secondary" title="Swap Run A and Run B configurations">
+        &#8644; SWAP A/B
+      </button>
+      <button id="btnExportCan" class="btn btn-secondary" title="Export simulated C-CAN frames (0x316, 0x162, 0x386) as candump.log">
+        &#128190; C-CAN LOG
+      </button>
+      <button id="btnExportCsv" class="btn btn-secondary" title="Export 50Hz A/B telemetry as CSV">
+        &#128202; CSV
+      </button>
+    </div>
+  </header>
+
+  <!-- MAIN WORKSPACE GRID -->
+  <div class="workspace">
+    <!-- LEFT SIDEBAR: SURFACE, CHASSIS, RUN A & RUN B CONFIGS -->
+    <aside class="sidebar">
+      <!-- 1. Ground Friction & Environment -->
+      <section class="panel">
+        <div class="panel-header">
+          <span class="panel-title">1. SURFACE FRICTION &amp; CHASSIS ($\mu$-SLIP)</span>
+          <span class="badge badge-neutral" id="muBadge">&mu; = 1.08</span>
+        </div>
+        <div class="panel-body">
+          <div class="form-row">
+            <label>Road Surface Preset</label>
+            <select id="surfaceSelect"></select>
+          </div>
+          <div class="form-grid-2">
+            <div class="form-row">
+              <label>Peak Grip &mu;<sub>peak</sub> <span id="lblMuPeak">1.08</span></label>
+              <input type="range" id="rngMuPeak" min="0.25" max="1.50" step="0.01" value="1.08" />
+            </div>
+            <div class="form-row">
+              <label>Peak Slip &kappa;<sub>peak</sub> <span id="lblKappaPeak">11%</span></label>
+              <input type="range" id="rngKappaPeak" min="0.04" max="0.22" step="0.01" value="0.11" />
+            </div>
+          </div>
+          <div class="mu-canvas-wrap">
+            <div class="mu-legend" id="legend_muCurve">
+              <span><i class="swatch swatch-a"></i> &mu;(&kappa;) Friction Curve</span>
+              <span><i class="dot dot-b"></i> Peak Traction (&mu;<sub>peak</sub>, &kappa;<sub>peak</sub>)</span>
+            </div>
+            <canvas id="muCurveCanvas" width="320" height="105"></canvas>
+          </div>
+          <div class="form-grid-3">
+            <div class="form-row">
+              <label>Mass (kg)</label>
+              <input type="number" id="inpMassKg" value="1915" step="10" />
+            </div>
+            <div class="form-row">
+              <label>Ambient (&deg;C)</label>
+              <input type="number" id="inpAmbientC" value="20" step="1" />
+            </div>
+            <div class="form-row">
+              <label>Grade (%)</label>
+              <input type="number" id="inpGradePct" value="0" step="0.5" />
+            </div>
+          </div>
+          <div class="form-grid-3">
+            <div class="form-row">
+              <label>Front R<sub>tire</sub> (mm)</label>
+              <input type="number" id="inpFrontTireMm" value="334" step="1" title="Physical front rolling radius in mm (AWD 0xC04214 nominal = 320mm)" />
+            </div>
+            <div class="form-row">
+              <label>Rear R<sub>tire</sub> (mm)</label>
+              <input type="number" id="inpRearTireMm" value="334" step="1" title="Physical rear rolling radius in mm (change vs front to simulate staggered tire slip trap)" />
+            </div>
+            <div class="form-row">
+              <label>Sim Time (s)</label>
+              <input type="number" id="inpSimDurSec" value="14.5" step="0.5" min="6" max="30" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. Run A Configuration (Baseline - Cyan) -->
+      <section class="panel panel-run-a">
+        <div class="panel-header">
+          <span class="panel-title"><span class="dot dot-a"></span>RUN A — BASELINE CALIBRATION</span>
+          <span class="badge badge-a">SLOT A</span>
+        </div>
+        <div class="panel-body">
+          <div class="form-row">
+            <label>Run A Label</label>
+            <input type="text" id="runA_label" value="Run A (Baseline)" />
+          </div>
+          <div class="form-row">
+            <label>SIM2K-260 ECU Binary (4 MB) <button type="button" class="btn-quick-import" data-target="ecu" data-assign="runA_ecuBin">+ Import .BIN</button></label>
+            <select id="runA_ecuBin"></select>
+          </div>
+          <div class="form-row">
+            <label>Kefico CPTSH 8AT TCU Binary <button type="button" class="btn-quick-import" data-target="tcu" data-assign="runA_tcuBin">+ Import .BIN</button></label>
+            <select id="runA_tcuBin"></select>
+          </div>
+          <div class="form-row">
+            <label>Magna ATC AWD ECU Binary <button type="button" class="btn-quick-import" data-target="awd" data-assign="runA_awdBin">+ Import .BIN</button></label>
+            <select id="runA_awdBin"></select>
+          </div>
+          <div class="form-grid-3">
+            <div class="form-row">
+              <label>Drive Mode</label>
+              <select id="runA_driveMode">
+                <option value="sport">Sport</option>
+                <option value="comfort">Comfort</option>
+                <option value="eco">Eco</option>
+                <option value="custom_m4">Mode 4</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>ESC / TCS</label>
+              <select id="runA_escMode">
+                <option value="sport">ESC Sport</option>
+                <option value="on">ESC Full On</option>
+                <option value="off">ESC Off</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>Rollout (in)</label>
+              <select id="runA_rollout">
+                <option value="0">0" (Street)</option>
+                <option value="12">12" (NHRA)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-grid-3">
+            <div class="form-row">
+              <label>Pre-Stage (s)</label>
+              <input type="number" id="runA_preStage" value="1.4" step="0.1" />
+            </div>
+            <div class="form-row">
+              <label>Brake (psi)</label>
+              <input type="number" id="runA_brakePsi" value="1200" step="50" />
+            </div>
+            <div class="form-row">
+              <label>Release (ms)</label>
+              <input type="number" id="runA_releaseMs" value="140" step="10" />
+            </div>
+          </div>
+
+          <details class="override-drawer">
+            <summary>&#9881; Live Firmware Overrides (Run A What-If)</summary>
+            <div class="override-grid">
+              <div class="form-row">
+                <label>ECU Torque / Boost Scale (%)</label>
+                <input type="number" id="runA_ovTorquePct" value="100" step="2" />
+              </div>
+              <div class="form-row">
+                <label>0x207AD9 Shift Spark Floor (&deg;)</label>
+                <input type="number" id="runA_ovSparkFloor" placeholder="Bin native" step="1" />
+              </div>
+              <div class="form-row">
+                <label>0x238B68 Launch Stall RPM</label>
+                <input type="number" id="runA_ovStallRPM" placeholder="Bin native" step="100" />
+              </div>
+              <div class="form-row">
+                <label>0x1FD198 TCU Torque Cap (Nm)</label>
+                <input type="number" id="runA_ovTcuCap" placeholder="Bin native" step="25" />
+              </div>
+              <div class="form-row">
+                <label>0xC07650 AWD Slew (Nm/s)</label>
+                <input type="number" id="runA_ovAwdSlew" placeholder="Bin native" step="500" />
+              </div>
+              <div class="form-row">
+                <label>0xC06080 Brake Gate Override</label>
+                <select id="runA_ovBrakeGate">
+                  <option value="">Binary Native</option>
+                  <option value="true">Bypass 64.5 psi Gate</option>
+                  <option value="false">Enforce 64.5 psi Gate</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label>0x200B4B TCS Inhibit</label>
+                <select id="runA_ovTcsInhibit">
+                  <option value="">Binary Native</option>
+                  <option value="1">1 (Inhibit TCS Cut)</option>
+                  <option value="0">0 (Stock TCS Active)</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label>0x203EC6 TCHA Surge Fix</label>
+                <select id="runA_ovTchaFix">
+                  <option value="">Binary Native</option>
+                  <option value="true">Disable TCHA Cut</option>
+                </select>
+              </div>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <!-- 3. Run B Configuration (Comparison - Amber) -->
+      <section class="panel panel-run-b">
+        <div class="panel-header">
+          <span class="panel-title"><span class="dot dot-b"></span>RUN B — COMPARISON CALIBRATION</span>
+          <label class="toggle-b-label">
+            <input type="checkbox" id="chkEnableRunB" checked /> Enable A/B Overlay
+          </label>
+        </div>
+        <div class="panel-body" id="runBPanelBody">
+          <div class="form-row">
+            <label>Run B Label</label>
+            <input type="text" id="runB_label" value="Run B (Tuned)" />
+          </div>
+          <div class="form-row">
+            <label>SIM2K-260 ECU Binary (4 MB) <button type="button" class="btn-quick-import" data-target="ecu" data-assign="runB_ecuBin">+ Import .BIN</button></label>
+            <select id="runB_ecuBin"></select>
+          </div>
+          <div class="form-row">
+            <label>Kefico CPTSH 8AT TCU Binary <button type="button" class="btn-quick-import" data-target="tcu" data-assign="runB_tcuBin">+ Import .BIN</button></label>
+            <select id="runB_tcuBin"></select>
+          </div>
+          <div class="form-row">
+            <label>Magna ATC AWD ECU Binary <button type="button" class="btn-quick-import" data-target="awd" data-assign="runB_awdBin">+ Import .BIN</button></label>
+            <select id="runB_awdBin"></select>
+          </div>
+          <div class="form-grid-3">
+            <div class="form-row">
+              <label>Drive Mode</label>
+              <select id="runB_driveMode">
+                <option value="sport">Sport</option>
+                <option value="comfort">Comfort</option>
+                <option value="eco">Eco</option>
+                <option value="custom_m4">Mode 4</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>ESC / TCS</label>
+              <select id="runB_escMode">
+                <option value="sport">ESC Sport</option>
+                <option value="on">ESC Full On</option>
+                <option value="off">ESC Off</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>Rollout (in)</label>
+              <select id="runB_rollout">
+                <option value="0">0" (Street)</option>
+                <option value="12">12" (NHRA)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-grid-3">
+            <div class="form-row">
+              <label>Pre-Stage (s)</label>
+              <input type="number" id="runB_preStage" value="1.4" step="0.1" />
+            </div>
+            <div class="form-row">
+              <label>Brake (psi)</label>
+              <input type="number" id="runB_brakePsi" value="1200" step="50" />
+            </div>
+            <div class="form-row">
+              <label>Release (ms)</label>
+              <input type="number" id="runB_releaseMs" value="140" step="10" />
+            </div>
+          </div>
+
+          <details class="override-drawer">
+            <summary>&#9881; Live Firmware Overrides (Run B What-If)</summary>
+            <div class="override-grid">
+              <div class="form-row">
+                <label>ECU Torque / Boost Scale (%)</label>
+                <input type="number" id="runB_ovTorquePct" value="114" step="2" />
+              </div>
+              <div class="form-row">
+                <label>0x207AD9 Shift Spark Floor (&deg;)</label>
+                <input type="number" id="runB_ovSparkFloor" placeholder="Bin native" step="1" />
+              </div>
+              <div class="form-row">
+                <label>0x238B68 Launch Stall RPM</label>
+                <input type="number" id="runB_ovStallRPM" placeholder="Bin native" step="100" />
+              </div>
+              <div class="form-row">
+                <label>0x1FD198 TCU Torque Cap (Nm)</label>
+                <input type="number" id="runB_ovTcuCap" placeholder="Bin native" step="25" />
+              </div>
+              <div class="form-row">
+                <label>0xC07650 AWD Slew (Nm/s)</label>
+                <input type="number" id="runB_ovAwdSlew" placeholder="Bin native" step="500" />
+              </div>
+              <div class="form-row">
+                <label>0xC06080 Brake Gate Override</label>
+                <select id="runB_ovBrakeGate">
+                  <option value="">Binary Native</option>
+                  <option value="true">Bypass 64.5 psi Gate</option>
+                  <option value="false">Enforce 64.5 psi Gate</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label>0x200B4B TCS Inhibit</label>
+                <select id="runB_ovTcsInhibit">
+                  <option value="">Binary Native</option>
+                  <option value="1">1 (Inhibit TCS Cut)</option>
+                  <option value="0">0 (Stock TCS Active)</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label>0x203EC6 TCHA Surge Fix</label>
+                <select id="runB_ovTchaFix">
+                  <option value="">Binary Native</option>
+                  <option value="true">Disable TCHA Cut</option>
+                </select>
+              </div>
+            </div>
+          </details>
+        </div>
+      </section>
+    </aside>
+
+    <!-- RIGHT MAIN STAGE: TIMESLIP CARDS, CALIBRATION DIFF BANNER, AND TELEMETRY TABS -->
+    <main class="main-stage">
+      <!-- Scenario Highlight Banner -->
+      <div class="scenario-banner" id="scenarioBanner">
+        <div class="scenario-banner-title" id="scenarioBannerTitle">Loading calibration inventory...</div>
+        <div class="scenario-banner-desc" id="scenarioBannerDesc"></div>
+        <div class="cal-diff-chips" id="calDiffChips"></div>
+      </div>
+
+      <!-- Drag Strip & Performance Timeslip KPI Grid -->
+      <section class="kpi-strip" id="kpiStrip">
+        <!-- Populated dynamically by app.js -->
+      </section>
+
+      <!-- Main Workspace Navigation Tabs -->
+      <div class="tab-bar">
+        <button class="tab-btn active" data-tab="tab-overview">1. Synchronized Telemetry (3-Pane)</button>
+        <button class="tab-btn" data-tab="tab-launch">2. Launch &amp; 64.5 psi Brake-Gate Microscope</button>
+        <button class="tab-btn" data-tab="tab-ecu-tcu">3. ECU Torque, Boost &amp; Shift Spark Cut</button>
+        <button class="tab-btn" data-tab="tab-awd-slip">4. AWD Split, Weight Transfer &amp; Wheel Slip</button>
+        <button class="tab-btn" data-tab="tab-shifts">5. Shift Event Table &amp; Decoded Firmware</button>
+        <button class="tab-btn" data-tab="tab-db-maps">6. BinGo DB Map Browser &amp; Binary Hex Diff</button>
+      </div>
+
+      <!-- Persistent Master Legend & Synchronized Cursor Bar (Never hidden when switching chart tabs) -->
+      <div class="scope-toolbar" id="globalScopeToolbar">
+        <div class="legend-inline">
+          <span class="legend-badge"><i class="swatch swatch-a"></i> <strong id="legRunALabel">Run A</strong> (Solid Traces)</span>
+          <span class="legend-badge"><i class="swatch swatch-b"></i> <strong id="legRunBLabel">Run B</strong> (Dashed Traces)</span>
+          <span class="legend-badge"><i class="swatch swatch-launch"></i> <strong>t = 0.00s</strong> Brake Release</span>
+        </div>
+        <div class="cursor-readout" id="cursorReadout">Hover any chart to inspect synchronized 1ms/20ms firmware state</div>
+      </div>
+
+      <!-- TAB 1: 3-PANE SYNCHRONIZED TELEMETRY OSCILLOSCOPE -->
+      <section class="tab-content active" id="tab-overview">
+        <div class="scope-stack">
+          <div class="scope-card">
+            <div class="scope-header">
+              <div class="scope-title">PANE 1: VEHICLE SPEED (MPH) &amp; LONGITUDINAL ACCELERATION (G)</div>
+              <div class="chart-legend" id="legend_canvasOverview1"></div>
+            </div>
+            <canvas id="canvasOverview1" class="scope-canvas" width="1100" height="195"></canvas>
+          </div>
+          <div class="scope-card">
+            <div class="scope-header">
+              <div class="scope-title">PANE 2: ENGINE RPM &amp; CRANKSHAFT TORQUE (NM) [WITH SHIFT CUTS &amp; TCHA SURGE]</div>
+              <div class="chart-legend" id="legend_canvasOverview2"></div>
+            </div>
+            <canvas id="canvasOverview2" class="scope-canvas" width="1100" height="195"></canvas>
+          </div>
+          <div class="scope-card">
+            <div class="scope-header">
+              <div class="scope-title">PANE 3: MAGNA ATC AWD COUPLING TORQUE (NM) &amp; REAR WHEEL SLIP RATIO (%)</div>
+              <div class="chart-legend" id="legend_canvasOverview3"></div>
+            </div>
+            <canvas id="canvasOverview3" class="scope-canvas" width="1100" height="195"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: LAUNCH & BRAKE-GATE MICROSCOPE (t = -0.5s .. +2.0s) -->
+      <section class="tab-content" id="tab-launch">
+        <div class="scope-toolbar scope-subnote">
+          <div class="scope-note">
+            <strong>High-Resolution Launch Window (t = -0.50s to +2.00s):</strong>
+            Inspects hydraulic brake release vs. Magna ATC <code>0xC07498</code> (64.5 psi gate), coupling slew rate (<code>0xC07650</code>: 6000 vs 9000 Nm/s), converter stall (<code>0x238B68</code>), and 60-ft traction.
+          </div>
+        </div>
+        <div class="scope-stack">
+          <div class="scope-card">
+            <div class="scope-header">
+              <div class="scope-title">BRAKE LINE PRESSURE (PSI) VS. AWD COUPLING TORQUE (NM) &amp; 64.5 PSI INHIBIT GATE</div>
+              <div class="chart-legend" id="legend_canvasLaunch1"></div>
+            </div>
+            <canvas id="canvasLaunch1" class="scope-canvas" width="1100" height="265"></canvas>
+          </div>
+          <div class="scope-card">
+            <div class="scope-header">
+              <div class="scope-title">LAUNCH REAR VS. FRONT WHEEL SLIP (%) &amp; LONGITUDINAL ACCELERATION (G)</div>
+              <div class="chart-legend" id="legend_canvasLaunch2"></div>
+            </div>
+            <canvas id="canvasLaunch2" class="scope-canvas" width="1100" height="265"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: ECU TORQUE, BOOST & SHIFT SPARK CUT -->
+      <section class="tab-content" id="tab-ecu-tcu">
+        <div class="scope-stack">
+          <div class="scope-card">
+            <div class="scope-header">
+              <div class="scope-title">UNCAPPED TORQUE VS. ACTUAL TORQUE (NM) &amp; MANIFOLD BOOST PRESSURE (PSI)</div>
+              <div class="chart-legend" id="legend_canvasEcu1"></div>
+            </div>
+            <canvas id="canvasEcu1" class="scope-canvas" width="1100" height="265"></canvas>
+          </div>
+          <div class="scope-card">
+            <div class="scope-header">
+              <div class="scope-title">IGNITION TIMING ADVANCE (&deg;BTDC), SHIFT SPARK FLOOR (0x207AD9) &amp; SPARK EFFICIENCY (&eta;<sub>iga</sub>)</div>
+              <div class="chart-legend" id="legend_canvasEcu2"></div>
+            </div>
+            <canvas id="canvasEcu2" class="scope-canvas" width="1100" height="265"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: AWD SPLIT, WEIGHT TRANSFER & WHEEL SLIP -->
+      <section class="tab-content" id="tab-awd-slip">
+        <div class="scope-stack">
+          <div class="scope-card">
+            <div class="scope-header">
+              <div class="scope-title">DYNAMIC WEIGHT TRANSFER: REAR NORMAL LOAD F<sub>z,r</sub> VS. FRONT NORMAL LOAD F<sub>z,f</sub> (NEWTONS)</div>
+              <div class="chart-legend" id="legend_canvasAwd1"></div>
+            </div>
+            <canvas id="canvasAwd1" class="scope-canvas" width="1100" height="265"></canvas>
+          </div>
+          <div class="scope-card">
+            <div class="scope-header">
+              <div class="scope-title">FRONT TORQUE SPLIT (%) &amp; FRONT VS. REAR TRACTIVE FORCE F<sub>x</sub> (NEWTONS)</div>
+              <div class="chart-legend" id="legend_canvasAwd2"></div>
+            </div>
+            <canvas id="canvasAwd2" class="scope-canvas" width="1100" height="265"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 5: SHIFT EVENT TABLE & DECODED BINARY CALIBRATION SUMMARY -->
+      <section class="tab-content" id="tab-shifts">
+        <div class="tables-grid-2">
+          <div class="table-card">
+            <div class="table-card-header">RUN A — SHIFT TELEMETRY &amp; SPARK CUT BREAKDOWN</div>
+            <div class="table-scroll">
+              <table class="data-table" id="tblShiftsA">
+                <thead>
+                  <tr>
+                    <th>Shift</th>
+                    <th>Time (s)</th>
+                    <th>Speed (km/h)</th>
+                    <th>RPM (In &rarr; Out)</th>
+                    <th>TCU Req (Nm)</th>
+                    <th>Min Spark (&deg;)</th>
+                    <th>0x207AD9 Floor</th>
+                    <th>Actual Min (Nm)</th>
+                    <th>Dur (ms)</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="table-card">
+            <div class="table-card-header">RUN B — SHIFT TELEMETRY &amp; SPARK CUT BREAKDOWN</div>
+            <div class="table-scroll">
+              <table class="data-table" id="tblShiftsB">
+                <thead>
+                  <tr>
+                    <th>Shift</th>
+                    <th>Time (s)</th>
+                    <th>Speed (km/h)</th>
+                    <th>RPM (In &rarr; Out)</th>
+                    <th>TCU Req (Nm)</th>
+                    <th>Min Spark (&deg;)</th>
+                    <th>0x207AD9 Floor</th>
+                    <th>Actual Min (Nm)</th>
+                    <th>Dur (ms)</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-card" style="margin-top: 12px;">
+          <div class="table-card-header">DECODED BINARY FIRMWARE PARAMETERS (EXACT ROM VALUES FROM LOADED .BIN FILES)</div>
+          <div class="table-scroll">
+            <table class="data-table" id="tblCalComparison">
+              <thead>
+                <tr>
+                  <th>Module</th>
+                  <th>Firmware Parameter / Map</th>
+                  <th>ROM / SW Address</th>
+                  <th>Run A Decoded Value</th>
+                  <th>Run B Decoded Value</th>
+                  <th>Physical Impact on Emulation</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 6: BINGO SQLITE DB MAP BROWSER & BINARY HEX DIFF INSPECTOR -->
+      <section class="tab-content" id="tab-db-maps">
+        <div class="map-browser-layout">
+          <div class="map-list-pane">
+            <div class="map-filter-bar">
+              <select id="dbModuleSelect">
+                <option value="ecu">ECU DB (flash_analysis.db — 1,440 maps)</option>
+                <option value="tcu">TCU DB (tcu_cptsh_95441_4J571.db — 296 maps)</option>
+                <option value="awd">AWD DB (awd_95447_4J105.db — 69 maps)</option>
+              </select>
+              <input type="text" id="dbSearchInput" placeholder="Search address (e.g. 0x80855518), name, category..." />
+              <button id="btnSearchMaps" class="btn btn-secondary">Filter</button>
+            </div>
+            <div class="quick-maps-bar">
+              <span class="quick-label">Key Maps:</span>
+              <button class="chip-btn" data-mod="ecu" data-addr="0x80814E80">ECU Sport Demand (0x80814E80)</button>
+              <button class="chip-btn" data-mod="ecu" data-addr="0x80855518">ECU TQI_BAS (0x80855518)</button>
+              <button class="chip-btn" data-mod="ecu" data-addr="0x80838090">ECU WOT Spark (0x80838090)</button>
+              <button class="chip-btn" data-mod="ecu" data-addr="0x80839AF4">ECU IGA_MIN (0x80839AF4)</button>
+              <button class="chip-btn" data-mod="tcu" data-addr="0x205FB4">TCU Sport Shift Slot 23 (0x205FB4)</button>
+              <button class="chip-btn" data-mod="tcu" data-addr="0x238B68">TCU Launch Stall (0x238B68)</button>
+              <button class="chip-btn" data-mod="tcu" data-addr="0x1FD198">TCU Torque Cap (0x1FD198)</button>
+              <button class="chip-btn" data-mod="awd" data-addr="0xC04BA0">AWD Sport Feed-Fwd (0xC04BA0)</button>
+              <button class="chip-btn" data-mod="awd" data-addr="0xC04778">AWD Sport Launch (0xC04778)</button>
+              <button class="chip-btn" data-mod="awd" data-addr="0xC06080">AWD Brake Gate (0xC06080)</button>
+            </div>
+            <div class="map-table-wrap">
+              <table class="data-table" id="tblDbMaps">
+                <thead>
+                  <tr>
+                    <th>Address</th>
+                    <th>Name</th>
+                    <th>Dim</th>
+                    <th>Type</th>
+                    <th>Category</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="map-diff-pane">
+            <div class="map-diff-header" id="mapDiffHeader">
+              Select any calibration map on the left to decode &amp; diff its 2D physical grid between Run A and Run B binaries.
+            </div>
+            <div class="map-diff-view-tabs">
+              <button class="subtab-btn active" data-gridmode="delta">Delta (Run B &minus; Run A)</button>
+              <button class="subtab-btn" data-gridmode="a">Run A Values</button>
+              <button class="subtab-btn" data-gridmode="b">Run B Values</button>
+            </div>
+            <div class="map-grid-container" id="mapGridContainer"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- BROWSER FILE PICKER & LOCAL STORAGE FOLDER TREE MODAL -->
+  <div class="modal-backdrop" id="importModal" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">&#128194; IMPORT DB / BIN &amp; LOCAL STORAGE TREE</div>
+          <div class="modal-subtitle">Import BinGo SQLite Databases (<code>.db</code>) or ECU/TCU/AWD Firmware Binaries (<code>.bin</code>) into the organized <code>storage/</code> folder tree</div>
+        </div>
+        <button type="button" class="btn btn-secondary" id="btnCloseImportModal">&times; Close</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- File Picker & Drag-and-Drop Bar -->
+        <div class="import-controls-row">
+          <div class="form-row" style="min-width: 240px;">
+            <label for="importTargetSelect">Target Module Classification</label>
+            <select id="importTargetSelect">
+              <option value="auto">Auto-Detect (by ROM Size / SQLite Header)</option>
+              <option value="ecu">SIM2K-260 ECU (storage/*/ecu)</option>
+              <option value="tcu">Kefico CPTSH 8AT TCU (storage/*/tcu)</option>
+              <option value="awd">Magna ATC AWD (storage/*/awd)</option>
+            </select>
+          </div>
+          <div class="import-dropzone" id="importDropzone">
+            <input type="file" id="filePickerInput" multiple accept=".bin,.db,.sqlite,.sqlite3,.rom,.ori" style="display: none;" />
+            <input type="file" id="quickFileInput" accept=".bin,.db,.sqlite,.sqlite3,.rom,.ori" style="display: none;" />
+            <button type="button" class="btn btn-primary" id="btnTriggerFilePicker">
+              &#128194; Browse Local .DB / .BIN Files...
+            </button>
+            <span class="dropzone-hint">or drag &amp; drop <code>.bin</code> / <code>.db</code> files here</span>
+          </div>
+        </div>
+
+        <div class="import-status-banner" id="importStatusBanner" style="display: none;"></div>
+
+        <!-- Local Storage Folder Tree View -->
+        <div class="storage-tree-header">
+          <span>APPLICATION LOCAL STORAGE DIRECTORY TREE (<code id="storageRootPath">./storage</code>)</span>
+          <span class="badge badge-neutral" id="storageSummaryBadge">0 files</span>
+        </div>
+        <div class="storage-tree-grid" id="storageTreeGrid">
+          <!-- Populated dynamically from /api/storage -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

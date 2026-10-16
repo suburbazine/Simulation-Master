@@ -1,0 +1,36 @@
+# Strictly exclude all SQLite databases and ECU/TCU/AWD firmware binaries from Git
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+*.bin
+*.rom
+*.ori
+*.hex
+*.s19
+*.a2l
+*.kp
+*.ols
+
+# Keep the organized storage/ folder tree structure tracked via .gitkeep and README.md
+!storage/
+!storage/**/
+!storage/**/.gitkeep
+!storage/README.md
+
+# Compiled binaries and runtime logs
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.log
+
+# OS / IDE artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
