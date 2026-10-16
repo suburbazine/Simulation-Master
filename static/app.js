@@ -87,6 +87,36 @@ function setupControls() {
 
   document.getElementById("chkEnableRunB").addEventListener("change", () => runSimulation());
 
+  // Bind Turbo Wheel Preset <-> Custom Dimension (mm) synchronization for Run A & Run B
+  const turboPresetMap = {
+    stock_mgt1549: { compIn: 37.2, compEx: 49.0, turbIn: 40.0, turbEx: 35.5 },
+    stage1_41_52: { compIn: 41.0, compEx: 52.0, turbIn: 42.5, turbEx: 38.0 },
+    stage2_44_56: { compIn: 44.0, compEx: 56.0, turbIn: 45.0, turbEx: 40.5 },
+    stage3_47_60: { compIn: 47.0, compEx: 60.0, turbIn: 49.0, turbEx: 44.0 },
+  };
+  ["runA", "runB"].forEach((prefix) => {
+    const presetSel = document.getElementById(`${prefix}_turboPreset`);
+    if (presetSel) {
+      presetSel.addEventListener("change", (e) => {
+        const dims = turboPresetMap[e.target.value];
+        if (dims) {
+          document.getElementById(`${prefix}_compInMm`).value = dims.compIn.toFixed(1);
+          document.getElementById(`${prefix}_compExMm`).value = dims.compEx.toFixed(1);
+          document.getElementById(`${prefix}_turbInMm`).value = dims.turbIn.toFixed(1);
+          document.getElementById(`${prefix}_turbExMm`).value = dims.turbEx.toFixed(1);
+        }
+      });
+    }
+    ["compInMm", "compExMm", "turbInMm", "turbExMm"].forEach((field) => {
+      const inp = document.getElementById(`${prefix}_${field}`);
+      if (inp && presetSel) {
+        inp.addEventListener("input", () => {
+          presetSel.value = "custom";
+        });
+      }
+    });
+  });
+
   // Map browser controls
   document.getElementById("btnSearchMaps").addEventListener("click", () => loadDbMapList());
   document.getElementById("dbModuleSelect").addEventListener("change", () => loadDbMapList());
@@ -221,6 +251,18 @@ function applyRunConfigToForm(prefix, cfg) {
   if (document.getElementById(`${prefix}_fuelType`)) {
     document.getElementById(`${prefix}_fuelType`).value = cfg.fuel_type || "93_aki";
   }
+  if (document.getElementById(`${prefix}_exhaustType`)) {
+    document.getElementById(`${prefix}_exhaustType`).value = cfg.exhaust_type || "sec_cat_delete";
+  }
+  if (document.getElementById(`${prefix}_turboPreset`)) {
+    document.getElementById(`${prefix}_turboPreset`).value = cfg.turbo_preset || "stock_mgt1549";
+  }
+  if (document.getElementById(`${prefix}_compInMm`)) {
+    document.getElementById(`${prefix}_compInMm`).value = (cfg.comp_inducer_mm || 37.2).toFixed(1);
+    document.getElementById(`${prefix}_compExMm`).value = (cfg.comp_exducer_mm || 49.0).toFixed(1);
+    document.getElementById(`${prefix}_turbInMm`).value = (cfg.turb_inducer_mm || 40.0).toFixed(1);
+    document.getElementById(`${prefix}_turbExMm`).value = (cfg.turb_exducer_mm || 35.5).toFixed(1);
+  }
   document.getElementById(`${prefix}_rollout`).value = String(cfg.rollout_inch || 0);
   document.getElementById(`${prefix}_preStage`).value = cfg.pre_stage_time_sec || 1.4;
   document.getElementById(`${prefix}_brakePsi`).value = cfg.brake_hold_psi || 1200;
@@ -285,6 +327,16 @@ function readRunConfigFromForm(prefix) {
     fuel_type: document.getElementById(`${prefix}_fuelType`)
       ? document.getElementById(`${prefix}_fuelType`).value
       : "93_aki",
+    exhaust_type: document.getElementById(`${prefix}_exhaustType`)
+      ? document.getElementById(`${prefix}_exhaustType`).value
+      : "sec_cat_delete",
+    turbo_preset: document.getElementById(`${prefix}_turboPreset`)
+      ? document.getElementById(`${prefix}_turboPreset`).value
+      : "stock_mgt1549",
+    comp_inducer_mm: parseFloat(document.getElementById(`${prefix}_compInMm`)?.value) || 37.2,
+    comp_exducer_mm: parseFloat(document.getElementById(`${prefix}_compExMm`)?.value) || 49.0,
+    turb_inducer_mm: parseFloat(document.getElementById(`${prefix}_turbInMm`)?.value) || 40.0,
+    turb_exducer_mm: parseFloat(document.getElementById(`${prefix}_turbExMm`)?.value) || 35.5,
     rollout_inch: parseFloat(document.getElementById(`${prefix}_rollout`).value) || 0,
     pre_stage_time_sec: parseFloat(document.getElementById(`${prefix}_preStage`).value) || 1.4,
     brake_hold_psi: parseFloat(document.getElementById(`${prefix}_brakePsi`).value) || 1200,
@@ -637,6 +689,19 @@ function renderAllCharts() {
     seriesRight: { key: "kr_deg", label: "Octane Knock Retard (°KR)", colorA: "#ff5252", colorB: "#ffd740" },
   });
 
+  drawScopeChart("canvasEcu4", telA, telB, {
+    tMin: -0.5,
+    tMax: null,
+    leftUnit: "EMAP PSI",
+    leftMin: 0,
+    leftMax: 65,
+    rightUnit: "Turbo kRPM",
+    rightMin: 0,
+    rightMax: 240,
+    seriesLeft: { key: "emap_psi", label: "Exhaust Manifold Backpressure EMAP (psi)", colorA: "#ff5252", colorB: "#ff9100" },
+    seriesRight: { key: "turbo_krpm", label: "Turbo Shaft Speed (kRPM)", colorA: "#00e5ff", colorB: "#00e676" },
+  });
+
   // Tab 4: AWD Split & Weight Transfer
   drawScopeChart("canvasAwd1", telA, telB, {
     tMin: -0.5,
@@ -975,9 +1040,9 @@ function updateCursorReadout(t) {
   if (!sa) return;
 
   const el = document.getElementById("cursorReadout");
-  let txt = `t=${sa.t >= 0 ? "+" : ""}${sa.t.toFixed(2)}s | [A] ${sa.v_mph.toFixed(1)} mph (G${sa.gear}, ${sa.rpm.toFixed(0)} RPM, ${sa.eng_nm.toFixed(0)} Nm, ${sa.boost_psi.toFixed(1)} psi, Spark ${sa.iga_deg.toFixed(1)}° / KR -${(sa.kr_deg || 0).toFixed(1)}°, CamOvl ${(sa.cam_overlap_deg || 0).toFixed(0)}°CA, AWD ${sa.awd_actual_nm.toFixed(0)} Nm)`;
+  let txt = `t=${sa.t >= 0 ? "+" : ""}${sa.t.toFixed(2)}s | [A] ${sa.v_mph.toFixed(1)} mph (G${sa.gear}, ${sa.rpm.toFixed(0)} RPM, ${sa.eng_nm.toFixed(0)} Nm, Boost ${sa.boost_psi.toFixed(1)} / EMAP ${(sa.emap_psi || 0).toFixed(1)} psi, Spark ${sa.iga_deg.toFixed(1)}° / KR -${(sa.kr_deg || 0).toFixed(1)}°, CamOvl ${(sa.cam_overlap_deg || 0).toFixed(0)}°CA)`;
   if (sb) {
-    txt += `  vs  [B] ${sb.v_mph.toFixed(1)} mph (G${sb.gear}, ${sb.rpm.toFixed(0)} RPM, ${sb.eng_nm.toFixed(0)} Nm, ${sb.boost_psi.toFixed(1)} psi, Spark ${sb.iga_deg.toFixed(1)}° / KR -${(sb.kr_deg || 0).toFixed(1)}°, CamOvl ${(sb.cam_overlap_deg || 0).toFixed(0)}°CA, AWD ${sb.awd_actual_nm.toFixed(0)} Nm)`;
+    txt += `  vs  [B] ${sb.v_mph.toFixed(1)} mph (G${sb.gear}, ${sb.rpm.toFixed(0)} RPM, ${sb.eng_nm.toFixed(0)} Nm, Boost ${sb.boost_psi.toFixed(1)} / EMAP ${(sb.emap_psi || 0).toFixed(1)} psi, Spark ${sb.iga_deg.toFixed(1)}° / KR -${(sb.kr_deg || 0).toFixed(1)}°, CamOvl ${(sb.cam_overlap_deg || 0).toFixed(0)}°CA)`;
   }
   el.textContent = txt;
 }

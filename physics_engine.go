@@ -181,7 +181,7 @@ func NormalizeEnvironment(env EnvironmentConfig) EnvironmentConfig {
 	return env
 }
 
-// NormalizeRunConfig fills in default launch & pedal parameters if omitted.
+// NormalizeRunConfig fills in default launch, fuel, turbo wheel, and exhaust parameters if omitted.
 func NormalizeRunConfig(cfg RunConfig) RunConfig {
 	if cfg.FuelType == "" {
 		if strings.Contains(strings.ToLower(cfg.ECUBinPath), "bef") {
@@ -189,6 +189,85 @@ func NormalizeRunConfig(cfg RunConfig) RunConfig {
 		} else {
 			cfg.FuelType = "93_aki"
 		}
+	}
+	if cfg.TurboPreset == "" {
+		cfg.TurboPreset = "stock_mgt1549"
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.TurboPreset)) {
+	case "stage1_41_52":
+		if cfg.CompInducerMm <= 0 {
+			cfg.CompInducerMm = 41.0
+		}
+		if cfg.CompExducerMm <= 0 {
+			cfg.CompExducerMm = 52.0
+		}
+		if cfg.TurbInducerMm <= 0 {
+			cfg.TurbInducerMm = 42.5
+		}
+		if cfg.TurbExducerMm <= 0 {
+			cfg.TurbExducerMm = 38.0
+		}
+	case "stage2_44_56":
+		if cfg.CompInducerMm <= 0 {
+			cfg.CompInducerMm = 44.0
+		}
+		if cfg.CompExducerMm <= 0 {
+			cfg.CompExducerMm = 56.0
+		}
+		if cfg.TurbInducerMm <= 0 {
+			cfg.TurbInducerMm = 45.0
+		}
+		if cfg.TurbExducerMm <= 0 {
+			cfg.TurbExducerMm = 40.5
+		}
+	case "stage3_47_60":
+		if cfg.CompInducerMm <= 0 {
+			cfg.CompInducerMm = 47.0
+		}
+		if cfg.CompExducerMm <= 0 {
+			cfg.CompExducerMm = 60.0
+		}
+		if cfg.TurbInducerMm <= 0 {
+			cfg.TurbInducerMm = 49.0
+		}
+		if cfg.TurbExducerMm <= 0 {
+			cfg.TurbExducerMm = 44.0
+		}
+	case "custom":
+		if cfg.CompInducerMm <= 0 {
+			cfg.CompInducerMm = 37.2
+		}
+		if cfg.CompExducerMm <= 0 {
+			cfg.CompExducerMm = 49.0
+		}
+		if cfg.TurbInducerMm <= 0 {
+			cfg.TurbInducerMm = 40.0
+		}
+		if cfg.TurbExducerMm <= 0 {
+			cfg.TurbExducerMm = 35.5
+		}
+	default: // "stock_mgt1549"
+		cfg.TurboPreset = "stock_mgt1549"
+		if cfg.CompInducerMm <= 0 {
+			cfg.CompInducerMm = 37.2
+		}
+		if cfg.CompExducerMm <= 0 {
+			cfg.CompExducerMm = 49.0
+		}
+		if cfg.TurbInducerMm <= 0 {
+			cfg.TurbInducerMm = 40.0
+		}
+		if cfg.TurbExducerMm <= 0 {
+			cfg.TurbExducerMm = 35.5
+		}
+	}
+	cfg.CompInducerMm = math.Max(30.0, math.Min(65.0, cfg.CompInducerMm))
+	cfg.CompExducerMm = math.Max(cfg.CompInducerMm+4.0, math.Min(82.0, cfg.CompExducerMm))
+	cfg.TurbInducerMm = math.Max(34.0, math.Min(68.0, cfg.TurbInducerMm))
+	cfg.TurbExducerMm = math.Max(30.0, math.Min(cfg.TurbInducerMm-1.5, cfg.TurbExducerMm))
+
+	if cfg.ExhaustType == "" {
+		cfg.ExhaustType = "sec_cat_delete"
 	}
 	if cfg.DriveMode == "" {
 		cfg.DriveMode = "sport"
@@ -290,6 +369,148 @@ func evalDualCVVT(rpm, airloadMg, overlapAdderDeg float64) (float64, float64, fl
 	veCamMult = math.Max(0.93, math.Min(1.06, veCamMult))
 
 	return camInDeg, camExDeg, overlapDeg, spoolTauMult, veCamMult
+}
+
+type turboExhaustDynamics struct {
+	SpoolTauMult            float64 // Combined rotor polar inertia & post-turbine restriction spool multiplier
+	SpoolRPMOffset          float64 // Boost threshold RPM shift from wheel inertia (0 for stock MGT1549DSL)
+	ChokeBoostCapHpa        float64 // Max manifold pressure (hPa) supported by compressor inducer at current RPM
+	CompEfficiency          float64 // Adiabatic compressor efficiency (0.52..0.77)
+	CompTempPenaltyC        float64 // Post-intercooler charge temp rise (deg C) when pushing compressor near choke
+	ExhBackpressurePsi      float64 // Post-turbine downpipe + catback exhaust backpressure (psi gauge)
+	EMAPPsi                 float64 // Pre-turbine exhaust manifold pressure (psi gauge)
+	DrivePressureRatio      float64 // Absolute pre-turbine to intake manifold pressure ratio (P_em / P_im)
+	TurboSpeedKRPM          float64 // Estimated turbocharger shaft speed (kRPM)
+	VEFlowMult              float64 // Volumetric efficiency factor from turbine/exhaust breathing & reversion
+	PumpingTorqueDeltaNm    float64 // Crankshaft torque delta (Nm) from exhaust pumping loop vs baseline
+	ResidualKnockPenaltyDeg float64 // Knock ceiling shift (deg) from hot trapped residual gas under high EMAP
+}
+
+// evalTurboAndExhaustDynamics models custom Compressor Inducer/Exducer (mm), Turbine Inducer/Exducer (mm),
+// and Exhaust System Backpressure (Primary/Secondary Cats, Downpipes, Catback) on the 3.3L Twin-Turbo V6 (G6DP).
+func evalTurboAndExhaustDynamics(cfg RunConfig, rpm, targetBoostHpa, curBoostHpa, ambientHpa, overlapDeg float64) turboExhaustDynamics {
+	// OEM Garrett MGT1549DSL reference dimensions:
+	// Compressor: 37.2 mm Inducer / 49.0 mm Exducer
+	// Turbine:    40.0 mm Inducer / 35.5 mm Exducer
+	compInAreaRatio := math.Pow(cfg.CompInducerMm/37.2, 2.0)
+	compExDiaRatio := cfg.CompExducerMm / 49.0
+	turbInDiaRatio := cfg.TurbInducerMm / 40.0
+	turbExAreaRatio := math.Pow(cfg.TurbExducerMm/35.5, 2.0)
+
+	// 1. Rotor Polar Moment of Inertia Ratio (J_rot ~ D^4)
+	rotorInertiaRatio := 0.42*math.Pow(compExDiaRatio, 4.0) + 0.58*math.Pow(turbInDiaRatio, 4.0)
+	// Dampen into practical transient spool time-constant multiplier & boost threshold RPM shift
+	inertiaSpoolMult := 1.0 + 0.34*(rotorInertiaRatio-1.0)
+	spoolRPMOffset := 260.0 * (rotorInertiaRatio - 1.0)
+
+	// 2. Exhaust System Resistance (K_exh in psi at reference 100% stock WOT mass flow)
+	var kExhPsi, exhSpoolMult float64
+	switch strings.ToLower(strings.TrimSpace(cfg.ExhaustType)) {
+	case "stock_full_cats":
+		// 4 OEM ceramic cats (primary + secondary) + stock baffled muffler
+		kExhPsi = 8.4
+		exhSpoolMult = 1.08
+	case "high_flow_catted":
+		// 200-cell metallic catted downpipes + 3.0" catback
+		kExhPsi = 2.9
+		exhSpoolMult = 0.94
+	case "catless_stock_cb":
+		// Catless downpipes + stock quiet rear muffler
+		kExhPsi = 3.5
+		exhSpoolMult = 0.92
+	case "catless_full_race":
+		// Catless downpipes + dual 3.0" valved race exhaust
+		kExhPsi = 1.6
+		exhSpoolMult = 0.88
+	case "open_dump_race":
+		// Open downpipes / race dump
+		kExhPsi = 0.55
+		exhSpoolMult = 0.84
+	default: // "sec_cat_delete" (Baseline street setup: OEM primary cats + secondary cat delete + catback)
+		kExhPsi = 4.6
+		exhSpoolMult = 1.00
+	}
+
+	// Normalized engine exhaust mass flow factor (1.0 = 6000 RPM @ 2717 hPa / 24.7 psi)
+	mDotNorm := math.Max(0.05, (rpm/6000.0)*(curBoostHpa/2717.0))
+
+	// Post-turbine exhaust backpressure (psi gauge)
+	exhBackpressurePsi := kExhPsi * math.Pow(mDotNorm, 1.82)
+
+	// 3. Compressor Inducer Mass-Flow Choke Ceiling & Adiabatic Efficiency
+	// On OEM 37.2mm inducers, mass flow begins approaching choke above ~5400 RPM at >22.5 psi
+	highRPMFactor := math.Max(0.0, (rpm-5000.0)/1600.0)
+	maxSupportedBoostPsi := (26.5 - 5.2*highRPMFactor) * compInAreaRatio
+	// Larger compressor exducer also raises peak pressure ratio capability
+	maxSupportedBoostPsi *= (0.75 + 0.25*compExDiaRatio)
+	chokeBoostCapHpa := ambientHpa + math.Max(8.0, maxSupportedBoostPsi)/0.0145038
+
+	// Compressor operating point relative to choke limit
+	chokeLoadFrac := mDotNorm / math.Max(0.5, compInAreaRatio)
+	etaComp := 0.74
+	if chokeLoadFrac > 0.82 {
+		etaComp = math.Max(0.54, 0.74-0.42*math.Pow(chokeLoadFrac-0.82, 1.35))
+	} else if chokeLoadFrac < 0.35 {
+		etaComp = 0.64 + (chokeLoadFrac/0.35)*0.10
+	}
+	compTempPenaltyC := math.Max(0.0, (0.72-etaComp)*48.0)
+
+	// 4. Pre-Turbine Exhaust Manifold Backpressure (EMAP in psi gauge) & Drive Pressure Ratio
+	curBoostPsi := math.Max(0.0, (curBoostHpa-ambientHpa)*0.0145038)
+	rpmFlowTerm := 1.02 + 0.76*math.Pow(rpm/5600.0, 1.25)
+	turbNozzlePenalty := math.Pow(1.0/math.Max(0.6, turbExAreaRatio), 1.15)
+	compEffPenalty := 0.72 / math.Max(0.54, etaComp)
+	deltaPTurbPsi := curBoostPsi * rpmFlowTerm * turbNozzlePenalty * compEffPenalty
+	emapPsi := exhBackpressurePsi + deltaPTurbPsi
+
+	pAmbPsi := ambientHpa * 0.0145038
+	drivePressureRatio := (pAmbPsi + emapPsi) / math.Max(pAmbPsi, pAmbPsi+curBoostPsi)
+
+	// 5. Turbocharger Shaft Speed (kRPM)
+	prComp := curBoostHpa / math.Max(800.0, ambientHpa)
+	baseTurboKRPM := 45.0 + 98.0*math.Pow(math.Max(0.0, prComp-1.0), 0.62) + 28.0*(rpm/6500.0)
+	chokeOverspeedKRPM := 0.0
+	if chokeLoadFrac > 0.85 {
+		chokeOverspeedKRPM = 36.0 * (chokeLoadFrac - 0.85)
+	}
+	turboKRPM := (baseTurboKRPM / math.Max(0.85, compExDiaRatio)) + chokeOverspeedKRPM
+
+	// 6. Volumetric Efficiency & Pumping Loop Effects relative to Baseline (Stock MGT1549 + sec_cat_delete)
+	// Reference baseline EMAP at this RPM & boost
+	refExhPsi := 4.6 * math.Pow(mDotNorm, 1.82)
+	refDeltaPTurbPsi := curBoostPsi * rpmFlowTerm * 1.0 * (0.72 / 0.70)
+	refEMAPPsi := refExhPsi + refDeltaPTurbPsi
+	emapDeltaFromRefPsi := emapPsi - refEMAPPsi
+
+	// Lower EMAP (via larger turbine exducer and/or catless exhaust) reduces negative pumping work and exhaust reversion
+	// For a 3.34L engine, 1 psi of reduced exhaust manifold backpressure frees ~1.85 Nm of pumping + scavenging torque
+	pumpingTorqueDeltaNm := -1.85 * emapDeltaFromRefPsi
+	// Additionally, larger compressor + turbine wheels breathing freely above 4500 RPM unlock top-end VE
+	veFlowMult := 1.0 - 0.0022*emapDeltaFromRefPsi
+	if drivePressureRatio > 1.55 && overlapDeg > 14.0 && rpm > 4400.0 {
+		// High backpressure + excessive valve overlap causes exhaust gas reversion back into the intake port
+		reversionPenalty := 0.0035 * (drivePressureRatio - 1.55) * (overlapDeg - 14.0)
+		veFlowMult -= reversionPenalty
+	}
+	veFlowMult = math.Max(0.88, math.Min(1.16, veFlowMult))
+
+	// Hot trapped residual exhaust gas under high EMAP lowers the cylinder knock threshold (or raises it when EMAP drops)
+	residualKnockPenaltyDeg := 0.09 * emapDeltaFromRefPsi
+
+	return turboExhaustDynamics{
+		SpoolTauMult:            inertiaSpoolMult * exhSpoolMult,
+		SpoolRPMOffset:          spoolRPMOffset,
+		ChokeBoostCapHpa:        chokeBoostCapHpa,
+		CompEfficiency:          etaComp,
+		CompTempPenaltyC:        compTempPenaltyC,
+		ExhBackpressurePsi:      exhBackpressurePsi,
+		EMAPPsi:                 emapPsi,
+		DrivePressureRatio:      drivePressureRatio,
+		TurboSpeedKRPM:          turboKRPM,
+		VEFlowMult:              veFlowMult,
+		PumpingTorqueDeltaNm:    pumpingTorqueDeltaNm,
+		ResidualKnockPenaltyDeg: residualKnockPenaltyDeg,
+	}
 }
 
 // ExecuteSimulation runs Run A (and optionally Run B) and computes the full A/B comparison diff.
@@ -477,12 +698,17 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 		accelG       = 0.0
 		prevAccelG   = 0.0
 
-		// Fuel & Dual-CVVT state
-		fuelSpec       = evalFuelThermodynamics(cfg.FuelType)
-		camInDeg       = 8.0
-		camExDeg       = -4.0
-		camOverlapDeg  = 12.0
-		krDeg          = 0.0
+		// Fuel, Dual-CVVT & Turbo/Exhaust state
+		fuelSpec           = evalFuelThermodynamics(cfg.FuelType)
+		camInDeg           = 8.0
+		camExDeg           = -4.0
+		camOverlapDeg      = 12.0
+		krDeg              = 0.0
+		emapPsi            = 0.0
+		exhBackpressurePsi = 0.0
+		drivePressureRatio = 1.0
+		turboKRPM          = 35.0
+		etaComp            = 0.72
 
 		// ECU/TCU 10ms state
 		tqiDrvNm       = 0.0
@@ -691,48 +917,64 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 			var spoolTauMult, veCamMult float64
 			camInDeg, camExDeg, camOverlapDeg, spoolTauMult, veCamMult = evalDualCVVT(engineRPM, airloadMg, cfg.Overrides.CamOverlapAdderDeg)
 
-			// Spool capability as a function of RPM & pre-stage brake-stand / RAL antilag
-			spoolFactor := math.Min(1.0, math.Max(0.15, (engineRPM-1100.0)/1650.0))
+			// Evaluate Custom Turbo Inducer/Exducer Wheel Geometry & Exhaust System Backpressure Dynamics
+			turboExh := evalTurboAndExhaustDynamics(cfg, engineRPM, targetBoostHpa, boostHpa, ambientHpa, camOverlapDeg)
+			emapPsi = turboExh.EMAPPsi
+			exhBackpressurePsi = turboExh.ExhBackpressurePsi
+			drivePressureRatio = turboExh.DrivePressureRatio
+			turboKRPM = turboExh.TurboSpeedKRPM
+			etaComp = turboExh.CompEfficiency
+
+			// Spool capability as a function of RPM, wheel inertia boost threshold, & pre-stage brake-stand / RAL antilag
+			effSpoolRPM := engineRPM - turboExh.SpoolRPMOffset
+			spoolFactor := math.Min(1.0, math.Max(0.15, (effSpoolRPM-1100.0)/1650.0))
 			if tSec < 0 {
 				if ralActive {
 					spoolFactor = 1.0 // Rolling/Stationary Antilag builds 100% boost target on the line
 				} else {
-					// Converter stall load builds boost proportional to stall RPM
-					spoolFactor = math.Min(0.92, math.Max(0.25, (engineRPM-1350.0)/2250.0))
+					// Converter stall load builds boost proportional to stall RPM & wheel inertia
+					spoolFactor = math.Min(0.92, math.Max(0.22, (effSpoolRPM-1350.0)/2250.0))
 				}
 			}
-			achievableBoostHpa := ambientHpa + (targetBoostHpa-ambientHpa)*spoolFactor*(cfg.PedalPct/100.0)
-			// First-order turbo lag filter (tau ~ 170 ms in boost, accelerated by Dual-CVVT scavenging & RAL)
-			tauSpool := 0.17 * spoolTauMult
+			// Clamp target boost by compressor inducer choke ceiling at high RPM
+			effectiveTargetHpa := math.Min(targetBoostHpa, turboExh.ChokeBoostCapHpa)
+			achievableBoostHpa := ambientHpa + (effectiveTargetHpa-ambientHpa)*spoolFactor*(cfg.PedalPct/100.0)
+			// First-order turbo lag filter (tau ~ 170 ms in boost, scaled by Dual-CVVT scavenging, wheel inertia & exhaust backpressure)
+			tauSpool := 0.17 * spoolTauMult * turboExh.SpoolTauMult
 			if ralActive {
-				tauSpool = 0.08
+				tauSpool = 0.08 * math.Sqrt(turboExh.SpoolTauMult)
 			}
 			boostHpa += (0.01 / tauSpool) * (achievableBoostHpa - boostHpa)
 
-			// Convert manifold pressure + Dual-CVVT volumetric efficiency + fuel latent charge cooling to cylinder air charge (mg/stk)
+			// Convert manifold pressure + Dual-CVVT VE + Turbo/Exhaust VE + fuel/compressor thermal density to cylinder air charge (mg/stk)
 			ve := 0.90
 			if engineRPM >= 2000 && engineRPM <= 5400 {
 				ve = 1.00
 			} else if engineRPM > 5400 {
 				ve = 1.00 - 0.07*((engineRPM-5400.0)/1200.0)
 			}
-			ve *= veCamMult
-			effChargeTempK := math.Max(250.0, tAmbK-fuelSpec.LatentChargeCoolC)
+			ve *= veCamMult * turboExh.VEFlowMult
+			effChargeTempK := math.Max(250.0, tAmbK-fuelSpec.LatentChargeCoolC+turboExh.CompTempPenaltyC)
 			tempDensityFactor := 293.15 / effChargeTempK
 			airloadMg = (boostHpa / 2717.0) * 1350.0 * ve * tempDensityFactor
 
 			// 4c. Forward Torque Lookup (0x255518 TQI_BAS & 0x253D14.. TQI_MAX)
 			tqiBas := Interp2D(ecu.FwdRPM, ecu.FwdAir, ecu.TQIBasA, engineRPM, airloadMg)
 			tqiMax := Interp2D(ecu.FwdRPM, ecu.FwdAir, ecu.TQIMaxEnv, engineRPM, airloadMg)
+			// If larger turbo wheels + higher boost flow beyond the stock 1350 mg/stk axis limit, scale physical torque envelope linearly with airmass
+			if airloadMg > 1250.0 {
+				highAirScale := 1.0 + 0.55*((airloadMg-1250.0)/1250.0)
+				tqiMax *= highAirScale
+			}
 
 			// Base & Optimum Ignition Lookup (0x238090 Base High & 0x238874 Opt High) + Live Spark Adder Override
 			igaCommandedDeg := Interp2D(ecu.IgnRPM, ecu.IgnLoad, ecu.IgnBaseHigh, engineRPM, airloadMg) + cfg.Overrides.SparkAdvanceAdderDeg
 			igaOptDeg := Interp2D(ecu.IgnRPM, ecu.IgnLoad, ecu.IgnOptHigh, engineRPM, airloadMg)
 			igaMinMapDeg := Interp2D(ecu.IGAMinCoolant, ecu.IGAMinLoad, ecu.IGAMinHigh, env.CoolantTempC, airloadMg)
 
-			// Evaluate Fuel Octane Knock Threshold & SIM2K-260 Knock Retard (krDeg)
+			// Evaluate Fuel Octane + Exhaust Backpressure Residual Gas Knock Threshold & SIM2K-260 Knock Retard (krDeg)
 			// 93 AKI supports up to (igaOptDeg - 8.8 deg) at 20C and 1250 mg/stk before knock sensor feedback pulls timing.
-			knockCeilingDeg := (igaOptDeg - 8.8) + fuelSpec.OctaneSparkOffsetDeg - 0.11*(env.AmbientTempC-20.0) - 0.007*math.Max(0.0, airloadMg-1250.0)
+			knockCeilingDeg := (igaOptDeg - 8.8) + fuelSpec.OctaneSparkOffsetDeg - 0.11*(env.AmbientTempC-20.0+turboExh.CompTempPenaltyC) - 0.007*math.Max(0.0, airloadMg-1250.0) - turboExh.ResidualKnockPenaltyDeg
 			if igaCommandedDeg > knockCeilingDeg && airloadMg > 650.0 {
 				krDeg = math.Min(9.0, 0.80*(igaCommandedDeg-knockCeilingDeg))
 			} else {
@@ -741,14 +983,16 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 			igaBaseDeg = igaCommandedDeg - krDeg
 
 			// Calculate physical crankshaft brake torque vs. ECU internal model torque:
-			// - Physical cylinder torque is governed by physical airload (tqiMax envelope), spark advance relative to MBT, and fuel energy multiplier.
+			// - Physical cylinder torque is governed by physical airload (tqiMax envelope), spark advance relative to MBT, fuel energy multiplier, and exhaust pumping work.
 			sparkAdvDeltaFromStock := igaBaseDeg - (igaOptDeg - 11.2)
 			sparkTorqueBonus := 1.0 + 0.013*math.Max(-6.0, math.Min(9.0, sparkAdvDeltaFromStock))
-			pumpingFrictionLossNm := 34.0 + 0.0045*engineRPM + 0.0000010*engineRPM*engineRPM
+			pumpingFrictionLossNm := (34.0 + 0.0045*engineRPM + 0.0000010*engineRPM*engineRPM) - turboExh.PumpingTorqueDeltaNm
 			physBrakeTorqueNm := math.Max(0.0, (tqiMax*0.92*sparkTorqueBonus*fuelSpec.CombustionEnergyMult)-pumpingFrictionLossNm)
 			physBrakeTorqueNm *= (cfg.Overrides.TorqueScalePct / 100.0)
 
-			tqiUncappedNm = math.Min(tqiDrvNm*(cfg.Overrides.TorqueScalePct/100.0)*fuelSpec.CombustionEnergyMult, physBrakeTorqueNm)
+			// Allow upgraded turbo/exhaust breathing hardware (positive PumpingTorqueDeltaNm) to contribute above base driver demand ceiling
+			hwBreathingBonusNm := math.Max(0.0, turboExh.PumpingTorqueDeltaNm*1.15)
+			tqiUncappedNm = math.Min((tqiDrvNm+hwBreathingBonusNm)*(cfg.Overrides.TorqueScalePct/100.0)*fuelSpec.CombustionEnergyMult, physBrakeTorqueNm)
 
 			// 4d. Loud-Tune TCHA Turbo Speed Limiter Bug (0x203EC6)
 			if tchaActive && tSec >= 0.15 {
@@ -1148,6 +1392,15 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 			if slipRPct > summary.MaxRearSlipPct {
 				summary.MaxRearSlipPct = round2(slipRPct)
 			}
+			if emapPsi > summary.PeakEMAPPsi {
+				summary.PeakEMAPPsi = round2(emapPsi)
+			}
+			if exhBackpressurePsi > summary.PeakExhBackpressurePsi {
+				summary.PeakExhBackpressurePsi = round2(exhBackpressurePsi)
+			}
+			if turboKRPM > summary.PeakTurboSpeedKRPM {
+				summary.PeakTurboSpeedKRPM = round2(turboKRPM)
+			}
 			if vKmh > summary.TopSpeedKmh {
 				summary.TopSpeedKmh = round2(vKmh)
 				summary.TopSpeedMph = round2(vMph)
@@ -1158,52 +1411,57 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 		if step%20 == 0 {
 			boostPsi := (boostHpa - ambientHpa) * 0.0145038
 			telemetry = append(telemetry, TelemetrySample{
-				TimeSec:           round3(tSec),
-				DistanceM:         round2(distM),
-				DistanceFt:        round2(distM * 3.28084),
-				SpeedKmh:          round2(vKmh),
-				SpeedMph:          round2(vMph),
-				AccelG:            round3(accelG),
-				Gear:              gear,
-				ShiftActive:       shiftActive,
-				EngineRPM:         round2(engineRPM),
-				TurbineRPM:        round2(turbineRPM),
-				PedalPct:          round2(cfg.PedalPct),
-				BrakePsi:          round2(brakePsi),
-				BoostHpa:          round2(boostHpa),
-				BoostPsi:          round2(boostPsi),
-				BoostTargetPsi:    round2(boostTargetPsi),
-				AirloadMgStk:      round2(airloadMg),
-				DriverDemandNm:    round2(tqiDrvNm),
-				UncappedTorqueNm:  round2(tqiUncappedNm),
-				TCUTorqueLimitNm:  round2(tcuLimitNm),
-				ActualEngineNm:    round2(actualEngNm),
-				SparkAdvanceDeg:   round2(igaActualDeg),
-				SparkFloorDeg:     round2(igaFloorDeg),
-				SparkEfficiency:   round3(etaIga),
-				KnockRetardDeg:    round2(krDeg),
-				IntakeCamDeg:      round2(camInDeg),
-				ExhaustCamDeg:     round2(camExDeg),
-				CamOverlapDeg:     round2(camOverlapDeg),
-				Lambda:            round3(fuelSpec.CommandedLambda),
-				AWDTargetNm:       round2(awdTargetNm),
-				AWDActualNm:       round2(awdActualNm),
-				AWDFrontSplitPct:  round2(awdSplitPct),
-				AWDBrakeGated:     awdBrakeGated,
-				FrontPropTorqueNm: round2(frontPropShaftNm),
-				RearPropTorqueNm:  round2(rearPropShaftNm),
-				FrontNormalLoadN:  round2(fzFront),
-				RearNormalLoadN:   round2(fzRear),
-				FrontWheelKmh:     round2(omegaFront * rFront * 3.6),
-				RearWheelKmh:      round2(omegaRear * rRear * 3.6),
-				FrontSlipPct:      round2(kappaFront * 100.0),
-				RearSlipPct:       round2(kappaRear * 100.0),
-				FrontMu:           round3(muFront),
-				RearMu:            round3(muRear),
-				FrontTractiveN:    round2(fxFront),
-				RearTractiveN:     round2(fxRear),
-				TCSActive:         tcsActive,
-				TCHACutActive:     tchaActiveFlag,
+				TimeSec:            round3(tSec),
+				DistanceM:          round2(distM),
+				DistanceFt:         round2(distM * 3.28084),
+				SpeedKmh:           round2(vKmh),
+				SpeedMph:           round2(vMph),
+				AccelG:             round3(accelG),
+				Gear:               gear,
+				ShiftActive:        shiftActive,
+				EngineRPM:          round2(engineRPM),
+				TurbineRPM:         round2(turbineRPM),
+				PedalPct:           round2(cfg.PedalPct),
+				BrakePsi:           round2(brakePsi),
+				BoostHpa:           round2(boostHpa),
+				BoostPsi:           round2(boostPsi),
+				BoostTargetPsi:     round2(boostTargetPsi),
+				EMAPPsi:            round2(emapPsi),
+				ExhBackpressurePsi: round2(exhBackpressurePsi),
+				DrivePressureRatio: round2(drivePressureRatio),
+				TurboSpeedKRPM:     round2(turboKRPM),
+				CompEfficiency:     round3(etaComp),
+				AirloadMgStk:       round2(airloadMg),
+				DriverDemandNm:     round2(tqiDrvNm),
+				UncappedTorqueNm:   round2(tqiUncappedNm),
+				TCUTorqueLimitNm:   round2(tcuLimitNm),
+				ActualEngineNm:     round2(actualEngNm),
+				SparkAdvanceDeg:    round2(igaActualDeg),
+				SparkFloorDeg:      round2(igaFloorDeg),
+				SparkEfficiency:    round3(etaIga),
+				KnockRetardDeg:     round2(krDeg),
+				IntakeCamDeg:       round2(camInDeg),
+				ExhaustCamDeg:      round2(camExDeg),
+				CamOverlapDeg:      round2(camOverlapDeg),
+				Lambda:             round3(fuelSpec.CommandedLambda),
+				AWDTargetNm:        round2(awdTargetNm),
+				AWDActualNm:        round2(awdActualNm),
+				AWDFrontSplitPct:   round2(awdSplitPct),
+				AWDBrakeGated:      awdBrakeGated,
+				FrontPropTorqueNm:  round2(frontPropShaftNm),
+				RearPropTorqueNm:   round2(rearPropShaftNm),
+				FrontNormalLoadN:   round2(fzFront),
+				RearNormalLoadN:    round2(fzRear),
+				FrontWheelKmh:      round2(omegaFront * rFront * 3.6),
+				RearWheelKmh:       round2(omegaRear * rRear * 3.6),
+				FrontSlipPct:       round2(kappaFront * 100.0),
+				RearSlipPct:        round2(kappaRear * 100.0),
+				FrontMu:            round3(muFront),
+				RearMu:             round3(muRear),
+				FrontTractiveN:     round2(fxFront),
+				RearTractiveN:      round2(fxRear),
+				TCSActive:          tcsActive,
+				TCHACutActive:      tchaActiveFlag,
 			})
 		}
 	}

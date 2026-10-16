@@ -187,4 +187,76 @@ func TestFuelTypeCamSparkAndBoostModeling(t *testing.T) {
 	}
 }
 
+func TestTurboWheelAndExhaustBackpressureModeling(t *testing.T) {
+	ecuBins, tcuBins, awdBins := DiscoverBinaries()
+	if len(ecuBins) < 2 || len(tcuBins) < 2 || len(awdBins) < 2 {
+		t.Skip("insufficient bins for turbo/exhaust test")
+	}
+
+	env := EnvironmentConfig{
+		SurfaceID:       "vht_drag",
+		VehicleMassKg:   1915,
+		AmbientTempC:    20,
+		CoolantTempC:    85,
+		FrontTireRadius: 0.334,
+		RearTireRadius:  0.334,
+		SimDurationSec:  13.5,
+	}
+
+	// Run A: Stock MGT1549DSL Turbos (37.2/49.0 & 40.0/35.5 mm) + Stock Full 4-Cat Exhaust at high boost (+3 psi)
+	stockTurboCats := RunConfig{
+		Label:           "Stock MGT1549DSL + Stock 4-Cat Exhaust",
+		ECUBinPath:      ecuBins[1].Path, // IntensePop v103
+		TCUBinPath:      tcuBins[1].Path, // EKM Tuned
+		AWDBinPath:      awdBins[1].Path, // SportLaunch
+		FuelType:        "e30",
+		TurboPreset:     "stock_mgt1549",
+		ExhaustType:     "stock_full_cats",
+		DriveMode:       "sport",
+		ESCMode:         "sport",
+		PreStageTimeSec: 1.4,
+		BrakeHoldPsi:    1200,
+		BrakeReleaseMs:  130,
+		PedalPct:        100,
+		Overrides:       OverrideConfig{TorqueScalePct: 112, BoostAdderPsi: 3.0},
+	}
+
+	// Run B: Custom Hybrid Wheels (44.5/57.0 mm Comp, 46.0/41.5 mm Turb) + Catless Dual 3" Race Exhaust
+	customHybridCatless := stockTurboCats
+	customHybridCatless.Label = "Custom 44.5/57 & 46/41.5mm Hybrid + Catless Race Exhaust"
+	customHybridCatless.TurboPreset = "custom"
+	customHybridCatless.CompInducerMm = 44.5
+	customHybridCatless.CompExducerMm = 57.0
+	customHybridCatless.TurbInducerMm = 46.0
+	customHybridCatless.TurbExducerMm = 41.5
+	customHybridCatless.ExhaustType = "catless_full_race"
+
+	resp, err := ExecuteSimulation(SimRequest{
+		Environment: env,
+		RunA:        stockTurboCats,
+		RunB:        &customHybridCatless,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteSimulation failed: %v", err)
+	}
+	sa := resp.RunA.Summary
+	sb := resp.RunB.Summary
+
+	t.Logf("Stock Turbos + Stock 4-Cat: 60ft=%.2fs | 0-60=%.2fs | 1/4mi=%.2fs @ %.1f mph | Peak=%.0f Nm / %.0f whp | PeakEMAP=%.1f psi | PeakExhBP=%.1f psi | Turbo=%.0f kRPM",
+		sa.SixtyFootSec, sa.ZeroTo60MphSec, sa.QuarterMileSec, sa.QuarterMileMph, sa.PeakEngineTorqueNm, sa.PeakWheelPowerHp, sa.PeakEMAPPsi, sa.PeakExhBackpressurePsi, sa.PeakTurboSpeedKRPM)
+	t.Logf("Custom 44.5/57 Hybrid + Catless Race: 60ft=%.2fs | 0-60=%.2fs | 1/4mi=%.2fs @ %.1f mph | Peak=%.0f Nm / %.0f whp | PeakEMAP=%.1f psi | PeakExhBP=%.1f psi | Turbo=%.0f kRPM",
+		sb.SixtyFootSec, sb.ZeroTo60MphSec, sb.QuarterMileSec, sb.QuarterMileMph, sb.PeakEngineTorqueNm, sb.PeakWheelPowerHp, sb.PeakEMAPPsi, sb.PeakExhBackpressurePsi, sb.PeakTurboSpeedKRPM)
+
+	if sb.PeakExhBackpressurePsi >= sa.PeakExhBackpressurePsi {
+		t.Fatalf("Expected lower post-turbine exhaust backpressure on catless race exhaust (%.2f vs %.2f psi)", sb.PeakExhBackpressurePsi, sa.PeakExhBackpressurePsi)
+	}
+	if sb.PeakEMAPPsi >= sa.PeakEMAPPsi {
+		t.Fatalf("Expected lower pre-turbine EMAP with larger 41.5mm turbine exducer + catless exhaust (%.2f vs %.2f psi)", sb.PeakEMAPPsi, sa.PeakEMAPPsi)
+	}
+	if sb.PeakWheelPowerHp <= sa.PeakWheelPowerHp {
+		t.Fatalf("Expected higher peak wheel HP with custom hybrid wheels + catless exhaust (%.1f vs %.1f whp)", sb.PeakWheelPowerHp, sa.PeakWheelPowerHp)
+	}
+}
+
+
 

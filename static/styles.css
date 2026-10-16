@@ -335,6 +335,12 @@ code {
   gap: 6px;
 }
 
+.form-grid-4 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 5px;
+}
+
 .mu-canvas-wrap {
   background: #080b10;
   border: 1px solid var(--border-col);

@@ -113,6 +113,12 @@ type RunConfig struct {
 	TCUBinPath       string         `json:"tcu_bin_path"`
 	AWDBinPath       string         `json:"awd_bin_path"`
 	FuelType         string         `json:"fuel_type"`          // "93_aki", "91_aki", "93_wmi", "e30", "e50", "e85"
+	TurboPreset      string         `json:"turbo_preset"`       // "stock_mgt1549", "stage1_41_52", "stage2_44_56", "stage3_47_60", "custom"
+	CompInducerMm    float64        `json:"comp_inducer_mm"`    // Compressor inducer diameter in mm (stock MGT1549DSL = 37.2 mm)
+	CompExducerMm    float64        `json:"comp_exducer_mm"`    // Compressor exducer diameter in mm (stock MGT1549DSL = 49.0 mm)
+	TurbInducerMm    float64        `json:"turb_inducer_mm"`    // Turbine inducer diameter in mm (stock MGT1549DSL = 40.0 mm)
+	TurbExducerMm    float64        `json:"turb_exducer_mm"`    // Turbine exducer diameter in mm (stock MGT1549DSL = 35.5 mm)
+	ExhaustType      string         `json:"exhaust_type"`       // "stock_full_cats", "sec_cat_delete", "high_flow_catted", "catless_stock_cb", "catless_full_race", "open_dump_race"
 	DriveMode        string         `json:"drive_mode"`         // "sport", "comfort", "eco", "custom_m4"
 	ESCMode          string         `json:"esc_mode"`           // "on", "sport", "off"
 	PreStageTimeSec  float64        `json:"pre_stage_time_sec"` // Brake-stand build time before launch (e.g. 1.5 s)
@@ -185,30 +191,33 @@ type ExtractedCalSummary struct {
 
 // PerformanceSummary holds standard drag strip & acceleration metrics for a run.
 type PerformanceSummary struct {
-	ZeroTo60MphSec     float64 `json:"zero_to_60_mph_sec"`
-	ZeroTo100KmhSec    float64 `json:"zero_to_100_kmh_sec"`
-	ZeroTo100MphSec    float64 `json:"zero_to_100_mph_sec"`
-	ZeroTo200KmhSec    float64 `json:"zero_to_200_kmh_sec"`
-	HundredTo200KmhSec float64 `json:"hundred_to_200_kmh_sec"`
-	SixtyTo130MphSec   float64 `json:"sixty_to_130_mph_sec"`
-	SixtyFootSec       float64 `json:"sixty_foot_sec"`
-	ThreeThirtyFootSec float64 `json:"three_thirty_foot_sec"`
-	EighthMileSec      float64 `json:"eighth_mile_sec"`
-	EighthMileMph      float64 `json:"eighth_mile_mph"`
-	ThousandFootSec    float64 `json:"thousand_foot_sec"`
-	QuarterMileSec     float64 `json:"quarter_mile_sec"`
-	QuarterMileMph     float64 `json:"quarter_mile_mph"`
-	PeakAccelG         float64 `json:"peak_accel_g"`
-	PeakEngineTorqueNm float64 `json:"peak_engine_torque_nm"`
-	PeakWheelPowerHp   float64 `json:"peak_wheel_power_hp"`
-	PeakAWDCouplingNm  float64 `json:"peak_awd_coupling_nm"`
-	LaunchAWDTorqueNm  float64 `json:"launch_awd_torque_nm"` // AWD torque at t = +0.05s after release
-	MaxFrontSlipPct    float64 `json:"max_front_slip_pct"`
-	MaxRearSlipPct     float64 `json:"max_rear_slip_pct"`
-	TCSEventsCount     int     `json:"tcs_events_count"`
-	TCHACutsCount      int     `json:"tcha_cuts_count"`
-	TopSpeedKmh        float64 `json:"top_speed_kmh"`
-	TopSpeedMph        float64 `json:"top_speed_mph"`
+	ZeroTo60MphSec         float64 `json:"zero_to_60_mph_sec"`
+	ZeroTo100KmhSec        float64 `json:"zero_to_100_kmh_sec"`
+	ZeroTo100MphSec        float64 `json:"zero_to_100_mph_sec"`
+	ZeroTo200KmhSec        float64 `json:"zero_to_200_kmh_sec"`
+	HundredTo200KmhSec     float64 `json:"hundred_to_200_kmh_sec"`
+	SixtyTo130MphSec       float64 `json:"sixty_to_130_mph_sec"`
+	SixtyFootSec           float64 `json:"sixty_foot_sec"`
+	ThreeThirtyFootSec     float64 `json:"three_thirty_foot_sec"`
+	EighthMileSec          float64 `json:"eighth_mile_sec"`
+	EighthMileMph          float64 `json:"eighth_mile_mph"`
+	ThousandFootSec        float64 `json:"thousand_foot_sec"`
+	QuarterMileSec         float64 `json:"quarter_mile_sec"`
+	QuarterMileMph         float64 `json:"quarter_mile_mph"`
+	PeakAccelG             float64 `json:"peak_accel_g"`
+	PeakEngineTorqueNm     float64 `json:"peak_engine_torque_nm"`
+	PeakWheelPowerHp       float64 `json:"peak_wheel_power_hp"`
+	PeakAWDCouplingNm      float64 `json:"peak_awd_coupling_nm"`
+	LaunchAWDTorqueNm      float64 `json:"launch_awd_torque_nm"` // AWD torque at t = +0.05s after release
+	MaxFrontSlipPct        float64 `json:"max_front_slip_pct"`
+	MaxRearSlipPct         float64 `json:"max_rear_slip_pct"`
+	TCSEventsCount         int     `json:"tcs_events_count"`
+	TCHACutsCount          int     `json:"tcha_cuts_count"`
+	PeakEMAPPsi            float64 `json:"peak_emap_psi"`
+	PeakExhBackpressurePsi float64 `json:"peak_exh_backpressure_psi"`
+	PeakTurboSpeedKRPM     float64 `json:"peak_turbo_krpm"`
+	TopSpeedKmh            float64 `json:"top_speed_kmh"`
+	TopSpeedMph            float64 `json:"top_speed_mph"`
 }
 
 // ShiftEvent captures detailed firmware & physical telemetry across each gear change.
@@ -233,52 +242,57 @@ type ShiftEvent struct {
 
 // TelemetrySample represents a 100 Hz (10 ms) snapshot of all physical & CAN bus channels.
 type TelemetrySample struct {
-	TimeSec           float64 `json:"t"`
-	DistanceM         float64 `json:"dist_m"`
-	DistanceFt        float64 `json:"dist_ft"`
-	SpeedKmh          float64 `json:"v_kmh"`
-	SpeedMph          float64 `json:"v_mph"`
-	AccelG            float64 `json:"accel_g"`
-	Gear              int     `json:"gear"`
-	ShiftActive       bool    `json:"shift_active"`
-	EngineRPM         float64 `json:"rpm"`
-	TurbineRPM        float64 `json:"turbine_rpm"`
-	PedalPct          float64 `json:"pedal_pct"`
-	BrakePsi          float64 `json:"brake_psi"`
-	BoostHpa          float64 `json:"boost_hpa"`
-	BoostPsi          float64 `json:"boost_psi"`
-	BoostTargetPsi    float64 `json:"boost_target_psi"`
-	AirloadMgStk      float64 `json:"airload_mg"`
-	DriverDemandNm    float64 `json:"tqi_drv_nm"`
-	UncappedTorqueNm  float64 `json:"tqi_uncapped_nm"`
-	TCUTorqueLimitNm  float64 `json:"tcu_lim_nm"`
-	ActualEngineNm    float64 `json:"eng_nm"`
-	SparkAdvanceDeg   float64 `json:"iga_deg"`
-	SparkFloorDeg     float64 `json:"iga_floor_deg"`
-	SparkEfficiency   float64 `json:"eta_iga"`
-	KnockRetardDeg    float64 `json:"kr_deg"`
-	IntakeCamDeg      float64 `json:"cam_in_deg"`
-	ExhaustCamDeg     float64 `json:"cam_ex_deg"`
-	CamOverlapDeg     float64 `json:"cam_overlap_deg"`
-	Lambda            float64 `json:"lambda"`
-	AWDTargetNm       float64 `json:"awd_target_nm"`
-	AWDActualNm       float64 `json:"awd_actual_nm"`
-	AWDFrontSplitPct  float64 `json:"awd_split_pct"`
-	AWDBrakeGated     bool    `json:"awd_brake_gated"`
-	FrontPropTorqueNm float64 `json:"t_front_nm"`
-	RearPropTorqueNm  float64 `json:"t_rear_nm"`
-	FrontNormalLoadN  float64 `json:"fz_front_n"`
-	RearNormalLoadN   float64 `json:"fz_rear_n"`
-	FrontWheelKmh     float64 `json:"v_wheel_f_kmh"`
-	RearWheelKmh      float64 `json:"v_wheel_r_kmh"`
-	FrontSlipPct      float64 `json:"slip_f_pct"`
-	RearSlipPct       float64 `json:"slip_r_pct"`
-	FrontMu           float64 `json:"mu_f"`
-	RearMu            float64 `json:"mu_r"`
-	FrontTractiveN    float64 `json:"fx_front_n"`
-	RearTractiveN     float64 `json:"fx_rear_n"`
-	TCSActive         bool    `json:"tcs_active"`
-	TCHACutActive     bool    `json:"tcha_active"`
+	TimeSec            float64 `json:"t"`
+	DistanceM          float64 `json:"dist_m"`
+	DistanceFt         float64 `json:"dist_ft"`
+	SpeedKmh           float64 `json:"v_kmh"`
+	SpeedMph           float64 `json:"v_mph"`
+	AccelG             float64 `json:"accel_g"`
+	Gear               int     `json:"gear"`
+	ShiftActive        bool    `json:"shift_active"`
+	EngineRPM          float64 `json:"rpm"`
+	TurbineRPM         float64 `json:"turbine_rpm"`
+	PedalPct           float64 `json:"pedal_pct"`
+	BrakePsi           float64 `json:"brake_psi"`
+	BoostHpa           float64 `json:"boost_hpa"`
+	BoostPsi           float64 `json:"boost_psi"`
+	BoostTargetPsi     float64 `json:"boost_target_psi"`
+	EMAPPsi            float64 `json:"emap_psi"`
+	ExhBackpressurePsi float64 `json:"exh_backpressure_psi"`
+	DrivePressureRatio float64 `json:"drive_pressure_ratio"`
+	TurboSpeedKRPM     float64 `json:"turbo_krpm"`
+	CompEfficiency     float64 `json:"eta_comp"`
+	AirloadMgStk       float64 `json:"airload_mg"`
+	DriverDemandNm     float64 `json:"tqi_drv_nm"`
+	UncappedTorqueNm   float64 `json:"tqi_uncapped_nm"`
+	TCUTorqueLimitNm   float64 `json:"tcu_lim_nm"`
+	ActualEngineNm     float64 `json:"eng_nm"`
+	SparkAdvanceDeg    float64 `json:"iga_deg"`
+	SparkFloorDeg      float64 `json:"iga_floor_deg"`
+	SparkEfficiency    float64 `json:"eta_iga"`
+	KnockRetardDeg     float64 `json:"kr_deg"`
+	IntakeCamDeg       float64 `json:"cam_in_deg"`
+	ExhaustCamDeg      float64 `json:"cam_ex_deg"`
+	CamOverlapDeg      float64 `json:"cam_overlap_deg"`
+	Lambda             float64 `json:"lambda"`
+	AWDTargetNm        float64 `json:"awd_target_nm"`
+	AWDActualNm        float64 `json:"awd_actual_nm"`
+	AWDFrontSplitPct   float64 `json:"awd_split_pct"`
+	AWDBrakeGated      bool    `json:"awd_brake_gated"`
+	FrontPropTorqueNm  float64 `json:"t_front_nm"`
+	RearPropTorqueNm   float64 `json:"t_rear_nm"`
+	FrontNormalLoadN   float64 `json:"fz_front_n"`
+	RearNormalLoadN    float64 `json:"fz_rear_n"`
+	FrontWheelKmh      float64 `json:"v_wheel_f_kmh"`
+	RearWheelKmh       float64 `json:"v_wheel_r_kmh"`
+	FrontSlipPct       float64 `json:"slip_f_pct"`
+	RearSlipPct        float64 `json:"slip_r_pct"`
+	FrontMu            float64 `json:"mu_f"`
+	RearMu             float64 `json:"mu_r"`
+	FrontTractiveN     float64 `json:"fx_front_n"`
+	RearTractiveN      float64 `json:"fx_rear_n"`
+	TCSActive          bool    `json:"tcs_active"`
+	TCHACutActive      bool    `json:"tcha_active"`
 }
 
 //MuSlipCurvePoint represents a point on the active surface's tire friction curve.

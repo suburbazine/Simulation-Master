@@ -141,6 +141,47 @@
               </select>
             </div>
             <div class="form-row">
+              <label>Exhaust System</label>
+              <select id="runA_exhaustType">
+                <option value="sec_cat_delete">Sec Cat Delete + Catback</option>
+                <option value="stock_full_cats">Stock 4-Cat Full OEM</option>
+                <option value="high_flow_catted">200-Cell Catted DP + 3"</option>
+                <option value="catless_stock_cb">Catless DP + Stock Muffler</option>
+                <option value="catless_full_race">Catless DP + Dual 3" Race</option>
+                <option value="open_dump_race">Open Downpipe / Dump</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>Twin-Turbo Wheel Spec (Comp Ind/Exd &amp; Turb Ind/Exd)</label>
+            <select id="runA_turboPreset">
+              <option value="stock_mgt1549">Stock Garrett MGT1549DSL (37.2/49.0 &amp; 40.0/35.5 mm)</option>
+              <option value="stage1_41_52">Stage 1 Drop-In Billet (41.0/52.0 &amp; 42.5/38.0 mm)</option>
+              <option value="stage2_44_56">Stage 2 Hybrid 600+ (44.0/56.0 &amp; 45.0/40.5 mm)</option>
+              <option value="stage3_47_60">Stage 3 Big-Wheel G25 Spec (47.0/60.0 &amp; 49.0/44.0 mm)</option>
+              <option value="custom">Custom Wheel Dimensions (mm)</option>
+            </select>
+          </div>
+          <div class="form-grid-4">
+            <div class="form-row">
+              <label title="Compressor Inducer Diameter (mm)">Comp In (mm)</label>
+              <input type="number" id="runA_compInMm" value="37.2" step="0.5" min="30" max="65" />
+            </div>
+            <div class="form-row">
+              <label title="Compressor Exducer Diameter (mm)">Comp Ex (mm)</label>
+              <input type="number" id="runA_compExMm" value="49.0" step="0.5" min="40" max="82" />
+            </div>
+            <div class="form-row">
+              <label title="Turbine Inducer Diameter (mm)">Turb In (mm)</label>
+              <input type="number" id="runA_turbInMm" value="40.0" step="0.5" min="34" max="68" />
+            </div>
+            <div class="form-row">
+              <label title="Turbine Exducer Diameter (mm)">Turb Ex (mm)</label>
+              <input type="number" id="runA_turbExMm" value="35.5" step="0.5" min="30" max="62" />
+            </div>
+          </div>
+          <div class="form-grid-3">
+            <div class="form-row">
               <label>Drive Mode</label>
               <select id="runA_driveMode">
                 <option value="sport">Sport</option>
@@ -149,8 +190,6 @@
                 <option value="custom_m4">Mode 4</option>
               </select>
             </div>
-          </div>
-          <div class="form-grid-2">
             <div class="form-row">
               <label>ESC / TCS</label>
               <select id="runA_escMode">
@@ -283,6 +322,47 @@
               </select>
             </div>
             <div class="form-row">
+              <label>Exhaust System</label>
+              <select id="runB_exhaustType">
+                <option value="sec_cat_delete">Sec Cat Delete + Catback</option>
+                <option value="stock_full_cats">Stock 4-Cat Full OEM</option>
+                <option value="high_flow_catted">200-Cell Catted DP + 3"</option>
+                <option value="catless_stock_cb">Catless DP + Stock Muffler</option>
+                <option value="catless_full_race">Catless DP + Dual 3" Race</option>
+                <option value="open_dump_race">Open Downpipe / Dump</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>Twin-Turbo Wheel Spec (Comp Ind/Exd &amp; Turb Ind/Exd)</label>
+            <select id="runB_turboPreset">
+              <option value="stock_mgt1549">Stock Garrett MGT1549DSL (37.2/49.0 &amp; 40.0/35.5 mm)</option>
+              <option value="stage1_41_52">Stage 1 Drop-In Billet (41.0/52.0 &amp; 42.5/38.0 mm)</option>
+              <option value="stage2_44_56">Stage 2 Hybrid 600+ (44.0/56.0 &amp; 45.0/40.5 mm)</option>
+              <option value="stage3_47_60">Stage 3 Big-Wheel G25 Spec (47.0/60.0 &amp; 49.0/44.0 mm)</option>
+              <option value="custom">Custom Wheel Dimensions (mm)</option>
+            </select>
+          </div>
+          <div class="form-grid-4">
+            <div class="form-row">
+              <label title="Compressor Inducer Diameter (mm)">Comp In (mm)</label>
+              <input type="number" id="runB_compInMm" value="37.2" step="0.5" min="30" max="65" />
+            </div>
+            <div class="form-row">
+              <label title="Compressor Exducer Diameter (mm)">Comp Ex (mm)</label>
+              <input type="number" id="runB_compExMm" value="49.0" step="0.5" min="40" max="82" />
+            </div>
+            <div class="form-row">
+              <label title="Turbine Inducer Diameter (mm)">Turb In (mm)</label>
+              <input type="number" id="runB_turbInMm" value="40.0" step="0.5" min="34" max="68" />
+            </div>
+            <div class="form-row">
+              <label title="Turbine Exducer Diameter (mm)">Turb Ex (mm)</label>
+              <input type="number" id="runB_turbExMm" value="35.5" step="0.5" min="30" max="62" />
+            </div>
+          </div>
+          <div class="form-grid-3">
+            <div class="form-row">
               <label>Drive Mode</label>
               <select id="runB_driveMode">
                 <option value="sport">Sport</option>
@@ -291,8 +371,6 @@
                 <option value="custom_m4">Mode 4</option>
               </select>
             </div>
-          </div>
-          <div class="form-grid-2">
             <div class="form-row">
               <label>ESC / TCS</label>
               <select id="runB_escMode">
@@ -475,7 +553,7 @@
         </div>
       </section>
 
-      <!-- TAB 3: ECU TORQUE, BOOST, SPARK, DUAL-CVVT CAM & KNOCK -->
+      <!-- TAB 3: ECU TORQUE, BOOST, SPARK, DUAL-CVVT CAM, KNOCK & EXHAUST BACKPRESSURE -->
       <section class="tab-content" id="tab-ecu-tcu">
         <div class="scope-stack">
           <div class="scope-card">
@@ -483,21 +561,28 @@
               <div class="scope-title">UNCAPPED TORQUE VS. ACTUAL TORQUE (NM) &amp; MANIFOLD BOOST PRESSURE (PSI)</div>
               <div class="chart-legend" id="legend_canvasEcu1"></div>
             </div>
-            <canvas id="canvasEcu1" class="scope-canvas" width="1100" height="195"></canvas>
+            <canvas id="canvasEcu1" class="scope-canvas" width="1100" height="175"></canvas>
           </div>
           <div class="scope-card">
             <div class="scope-header">
               <div class="scope-title">IGNITION TIMING ADVANCE (&deg;BTDC), SHIFT SPARK FLOOR (0x207AD9) &amp; SPARK EFFICIENCY (&eta;<sub>iga</sub>)</div>
               <div class="chart-legend" id="legend_canvasEcu2"></div>
             </div>
-            <canvas id="canvasEcu2" class="scope-canvas" width="1100" height="195"></canvas>
+            <canvas id="canvasEcu2" class="scope-canvas" width="1100" height="175"></canvas>
           </div>
           <div class="scope-card">
             <div class="scope-header">
               <div class="scope-title">DUAL-CVVT CAM VALVE OVERLAP (&deg;CA SCAVENGING) &amp; FUEL OCTANE KNOCK RETARD (&deg;KR)</div>
               <div class="chart-legend" id="legend_canvasEcu3"></div>
             </div>
-            <canvas id="canvasEcu3" class="scope-canvas" width="1100" height="195"></canvas>
+            <canvas id="canvasEcu3" class="scope-canvas" width="1100" height="175"></canvas>
+          </div>
+          <div class="scope-card">
+            <div class="scope-header">
+              <div class="scope-title">PRE-TURBINE EXHAUST MANIFOLD BACKPRESSURE (EMAP PSI) &amp; TURBO SHAFT SPEED (KRPM)</div>
+              <div class="chart-legend" id="legend_canvasEcu4"></div>
+            </div>
+            <canvas id="canvasEcu4" class="scope-canvas" width="1100" height="175"></canvas>
           </div>
         </div>
       </section>
