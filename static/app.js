@@ -9,11 +9,46 @@ let hoverTimeSec = null;
 let quickImportState = { target: "auto", assignSelectId: null };
 
 document.addEventListener("DOMContentLoaded", async () => {
+  setupPageNavigation();
   setupTabs();
   setupControls();
+  setupChassis3DStudio();
   setupImportModal();
   await loadInventory();
 });
+
+function switchPage(pageId) {
+  document.querySelectorAll(".page-view").forEach((pv) => pv.classList.remove("active"));
+  document.querySelectorAll(".page-nav-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.page === pageId);
+  });
+  const target = document.getElementById(pageId);
+  if (target) target.classList.add("active");
+  if (pageId === "pageSimulation") {
+    updateActiveConfigSummaryBar();
+    renderAllCharts();
+    renderChassis3DScene();
+  } else if (lastSimResult) {
+    renderMuSlipCurve(lastSimResult.mu_slip_curve, lastSimResult.surface);
+  }
+}
+
+function setupPageNavigation() {
+  document.querySelectorAll(".page-nav-btn").forEach((btn) => {
+    btn.addEventListener("click", () => switchPage(btn.dataset.page));
+  });
+  const btnJump = document.getElementById("btnJumpToConfig");
+  if (btnJump) {
+    btnJump.addEventListener("click", () => switchPage("pageConfiguration"));
+  }
+  const btnApplyTop = document.getElementById("btnApplyAndReturnTop");
+  if (btnApplyTop) {
+    btnApplyTop.addEventListener("click", async () => {
+      await runSimulation();
+      switchPage("pageSimulation");
+    });
+  }
+}
 
 function setupTabs() {
   const btns = document.querySelectorAll(".tab-btn");
@@ -25,6 +60,9 @@ function setupTabs() {
       const target = document.getElementById(btn.dataset.tab);
       if (target) target.classList.add("active");
       renderAllCharts();
+      if (btn.dataset.tab === "tab-chassis-3d") {
+        renderChassis3DScene();
+      }
       if (btn.dataset.tab === "tab-db-maps" && !lastMapCompare) {
         loadDbMapList();
         compareSpecificMap("ecu", "0x80855518");
@@ -85,6 +123,18 @@ function setupControls() {
   });
   document.getElementById("rngKappaPeak").addEventListener("change", () => runSimulation());
 
+  const inpAirflow = document.getElementById("inpAirflowRestrPct");
+  if (inpAirflow) {
+    inpAirflow.addEventListener("input", (e) => {
+      const v = parseFloat(e.target.value) || 0;
+      const lbl = document.getElementById("lblAirflowRestrPct");
+      if (lbl) {
+        lbl.textContent = v === 0 ? "0% (Unrestricted)" : `${v.toFixed(0)}% Restricted`;
+      }
+    });
+    inpAirflow.addEventListener("change", () => runSimulation());
+  }
+
   document.getElementById("chkEnableRunB").addEventListener("change", () => runSimulation());
 
   // Bind Turbo Wheel Preset <-> Custom Dimension (mm) synchronization for Run A & Run B
@@ -134,7 +184,10 @@ function setupControls() {
     });
   });
 
-  window.addEventListener("resize", () => renderAllCharts());
+  window.addEventListener("resize", () => {
+    renderAllCharts();
+    renderChassis3DScene();
+  });
 }
 
 function renderInventoryUI(inv, preserveSelection) {
@@ -232,11 +285,50 @@ function applyPreset(preset) {
   document.getElementById("inpFrontTireMm").value = Math.round((env.front_tire_radius || 0.334) * 1000);
   document.getElementById("inpRearTireMm").value = Math.round((env.rear_tire_radius || 0.334) * 1000);
   document.getElementById("inpSimDurSec").value = env.sim_duration_sec || 14.5;
+  if (document.getElementById("inpAirflowRestrPct")) {
+    const af = env.airflow_restriction_pct || 0;
+    document.getElementById("inpAirflowRestrPct").value = af;
+    const lbl = document.getElementById("lblAirflowRestrPct");
+    if (lbl) lbl.textContent = af === 0 ? "0% (Unrestricted)" : `${af}% Restricted`;
+  }
 
   applyRunConfigToForm("runA", preset.run_a);
   if (preset.run_b) {
     document.getElementById("chkEnableRunB").checked = true;
     applyRunConfigToForm("runB", preset.run_b);
+  }
+  updateActiveConfigSummaryBar();
+}
+
+function updateActiveConfigSummaryBar() {
+  const surfSel = document.getElementById("surfaceSelect");
+  const surfText = surfSel && surfSel.selectedOptions[0] ? surfSel.selectedOptions[0].text : "Surface";
+  const af = parseFloat(document.getElementById("inpAirflowRestrPct")?.value) || 0;
+  const envPill = document.getElementById("summaryEnvPill");
+  if (envPill) {
+    envPill.innerHTML = `${escapeHtml(surfText)} &bull; ${document.getElementById("inpMassKg")?.value || 1915}kg &bull; Airflow Restr: <strong>${af.toFixed(0)}%</strong>`;
+  }
+
+  const fmtRunPill = (prefix, slotName, dotClass) => {
+    const lbl = document.getElementById(`${prefix}_label`)?.value || slotName;
+    const fuel = (document.getElementById(`${prefix}_fuelType`)?.value || "93_aki").toUpperCase();
+    const cIn = document.getElementById(`${prefix}_compInMm`)?.value || "37.2";
+    const cEx = document.getElementById(`${prefix}_compExMm`)?.value || "49.0";
+    const exhSel = document.getElementById(`${prefix}_exhaustType`);
+    const exhText = exhSel && exhSel.selectedOptions[0] ? exhSel.selectedOptions[0].text : "Exhaust";
+    return `<i class="dot ${dotClass}"></i> <strong>${escapeHtml(lbl)}</strong>: ${fuel} | Turbo ${cIn}/${cEx}mm | ${escapeHtml(exhText)}`;
+  };
+
+  const pillA = document.getElementById("summaryRunAPill");
+  if (pillA) pillA.innerHTML = fmtRunPill("runA", "Run A", "dot-a");
+
+  const pillB = document.getElementById("summaryRunBPill");
+  if (pillB) {
+    if (document.getElementById("chkEnableRunB")?.checked) {
+      pillB.innerHTML = fmtRunPill("runB", "Run B", "dot-b");
+    } else {
+      pillB.innerHTML = `<i class="dot dot-b"></i> <strong>Run B:</strong> Disabled`;
+    }
   }
 }
 
@@ -372,6 +464,7 @@ function buildSimRequestPayload() {
     front_tire_radius: (parseFloat(document.getElementById("inpFrontTireMm").value) || 334) / 1000.0,
     rear_tire_radius: (parseFloat(document.getElementById("inpRearTireMm").value) || 334) / 1000.0,
     sim_duration_sec: parseFloat(document.getElementById("inpSimDurSec").value) || 14.5,
+    airflow_restriction_pct: parseFloat(document.getElementById("inpAirflowRestrPct")?.value) || 0,
   };
 
   const req = {
@@ -407,10 +500,12 @@ async function runSimulation() {
       return;
     }
     lastSimResult = data;
+    updateActiveConfigSummaryBar();
     renderMuSlipCurve(data.mu_slip_curve, data.surface);
     renderKpiStrip(data);
     renderCalDiffBanner(data);
     renderShiftAndCalTables(data);
+    syncChassisTimelineWithResult(data);
     renderAllCharts();
   } catch (err) {
     console.error("Simulation failed:", err);
@@ -727,6 +822,33 @@ function renderAllCharts() {
     rightMax: 14000,
     seriesLeft: { key: "awd_split_pct", label: "AWD Front Split %", colorA: "#00e5ff", colorB: "#ff9100" },
     seriesRight: { key: "fx_rear_n", label: "Rear Tractive Force Fx,r (N)", colorA: "#00e676", colorB: "#b388ff" },
+  });
+
+  // Tab: 3D Chassis Thermal & Stress Timeline Scopes
+  drawScopeChart("canvasThermal1", telA, telB, {
+    tMin: null,
+    tMax: null,
+    leftUnit: "EGT °C",
+    leftMin: 350,
+    leftMax: 1000,
+    rightUnit: "Fluid/Clutch °C",
+    rightMin: 40,
+    rightMax: 130,
+    seriesLeft: { key: "temp_egt_c", label: "Exhaust Manifold EGT (°C)", colorA: "#ff5252", colorB: "#ff9100" },
+    seriesRight: { key: "temp_trans_c", label: "8AT Trans ATF Temp (°C)", colorA: "#00e5ff", colorB: "#00e676" },
+  });
+
+  drawScopeChart("canvasThermal2", telA, telB, {
+    tMin: null,
+    tMax: null,
+    leftUnit: "Stress %",
+    leftMin: 0,
+    leftMax: 105,
+    rightUnit: "Slip kW",
+    rightMin: 0,
+    rightMax: 180,
+    seriesLeft: { key: "stress_trans_pct", label: "8AT / Drivetrain Stress (%)", colorA: "#00e5ff", colorB: "#ff9100" },
+    seriesRight: { key: "tc_slip_kw", label: "TC + Clutch Slip Dissipation (kW)", colorA: "#b388ff", colorB: "#ffd740" },
   });
 }
 
@@ -1510,3 +1632,1031 @@ function formatBytes(bytes) {
   return bytes + " B";
 }
 
+// ============================================================================
+// INTERACTIVE 3D KIA STINGER GT (CK) WIREFRAME, SUB-MODULE STRESS & THERMAL STUDIO
+// ============================================================================
+const chassis3DState = {
+  yaw: -0.62,
+  pitch: 0.34,
+  dist: 5.4,
+  targetX: 0.1,
+  targetY: 0.45,
+  targetZ: 0.0,
+  goalYaw: -0.62,
+  goalPitch: 0.34,
+  goalDist: 5.4,
+  goalTargetX: 0.1,
+  goalTargetY: 0.45,
+  goalTargetZ: 0.0,
+  focusModule: "all",
+  activeRun: "B",
+  heatMode: "stress",
+  frameIdx: 0,
+  playing: false,
+  playSpeed: 0.5,
+  wheelAngleFront: 0,
+  wheelAngleRear: 0,
+  airflowPhase: 0,
+  dragging: false,
+  lastMouseX: 0,
+  lastMouseY: 0,
+  animRafId: null,
+  lastTickMs: 0,
+};
+
+const MODULE_CAMERA_TARGETS = {
+  all: { x: 0.05, y: 0.48, z: 0.0, dist: 5.3, yaw: -0.62, pitch: 0.34, label: "ALL MODULES (FULL STINGER GT)" },
+  engine: { x: 1.48, y: 0.54, z: 0.0, dist: 2.35, yaw: -0.55, pitch: 0.38, label: "1. 3.3L TWIN-TURBO V6 & FMIC" },
+  trans: { x: 0.58, y: 0.36, z: 0.0, dist: 2.1, yaw: -0.78, pitch: 0.32, label: "2. A8LR1 8AT & TORQUE CONVERTER" },
+  awd: { x: 0.04, y: 0.34, z: 0.08, dist: 1.75, yaw: -0.85, pitch: 0.36, label: "3. MAGNA ATC AWD TRANSFER CASE" },
+  driveline_f: { x: 0.92, y: 0.33, z: 0.15, dist: 2.45, yaw: -0.68, pitch: 0.42, label: "4. FRONT PROPSHAFT, DIFF & AXLES" },
+  driveline_r: { x: -0.88, y: 0.34, z: 0.0, dist: 2.55, yaw: -2.35, pitch: 0.35, label: "5. REAR PROPSHAFT, LSD & AXLES" },
+  tires: { x: -0.2, y: 0.34, z: 0.55, dist: 3.8, yaw: -0.95, pitch: 0.24, label: "6. TIRES, WHEELS & BREMBO BRAKES" },
+};
+
+function setupChassis3DStudio() {
+  const canvas = document.getElementById("canvasChassis3D");
+  if (!canvas) return;
+
+  // Mouse Orbit & Wheel Zoom
+  canvas.addEventListener("mousedown", (e) => {
+    chassis3DState.dragging = true;
+    chassis3DState.lastMouseX = e.clientX;
+    chassis3DState.lastMouseY = e.clientY;
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!chassis3DState.dragging) return;
+    const dx = e.clientX - chassis3DState.lastMouseX;
+    const dy = e.clientY - chassis3DState.lastMouseY;
+    chassis3DState.lastMouseX = e.clientX;
+    chassis3DState.lastMouseY = e.clientY;
+    chassis3DState.yaw += dx * 0.0085;
+    chassis3DState.pitch = Math.max(-0.45, Math.min(1.38, chassis3DState.pitch + dy * 0.0075));
+    chassis3DState.goalYaw = chassis3DState.yaw;
+    chassis3DState.goalPitch = chassis3DState.pitch;
+    renderChassis3DScene();
+  });
+  window.addEventListener("mouseup", () => {
+    chassis3DState.dragging = false;
+  });
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const factor = e.deltaY > 0 ? 1.09 : 0.91;
+    chassis3DState.dist = Math.max(1.35, Math.min(9.0, chassis3DState.dist * factor));
+    chassis3DState.goalDist = chassis3DState.dist;
+    renderChassis3DScene();
+  });
+
+  // Sub-Module Focus Isolation Buttons
+  document.querySelectorAll(".mod-focus-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      setChassisSubmoduleFocus(btn.dataset.focus || "all");
+    });
+  });
+
+  // Camera Angle Presets
+  document.querySelectorAll(".cam-preset-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.cam;
+      if (mode === "iso") {
+        chassis3DState.goalYaw = -0.62;
+        chassis3DState.goalPitch = 0.34;
+      } else if (mode === "side") {
+        chassis3DState.goalYaw = -Math.PI / 2;
+        chassis3DState.goalPitch = 0.08;
+      } else if (mode === "top") {
+        chassis3DState.goalYaw = 0.0;
+        chassis3DState.goalPitch = 1.32;
+      } else if (mode === "under") {
+        chassis3DState.goalYaw = -0.58;
+        chassis3DState.goalPitch = -0.32;
+      }
+      startChassisSmoothLoop();
+    });
+  });
+
+  // Run Selector & Shader Mode
+  const selRun = document.getElementById("selChassisRun");
+  if (selRun) {
+    selRun.addEventListener("change", (e) => {
+      chassis3DState.activeRun = e.target.value;
+      renderChassis3DScene();
+    });
+  }
+  const selHeat = document.getElementById("selChassisHeatMode");
+  if (selHeat) {
+    selHeat.addEventListener("change", (e) => {
+      chassis3DState.heatMode = e.target.value;
+      renderChassis3DScene();
+    });
+  }
+
+  // Timeline Scrubber & Play/Pause
+  const rng = document.getElementById("rngChassisTimeline");
+  if (rng) {
+    rng.addEventListener("input", (e) => {
+      chassis3DState.frameIdx = parseInt(e.target.value, 10) || 0;
+      const tel = getActiveChassisTelemetry();
+      if (tel[chassis3DState.frameIdx]) {
+        hoverTimeSec = tel[chassis3DState.frameIdx].t;
+        updateCursorReadout(hoverTimeSec);
+      }
+      renderChassis3DScene();
+      renderAllCharts();
+    });
+  }
+
+  const btnPlay = document.getElementById("btnPlayTimeline");
+  if (btnPlay) {
+    btnPlay.addEventListener("click", () => {
+      chassis3DState.playing = !chassis3DState.playing;
+      btnPlay.innerHTML = chassis3DState.playing ? "&#9208; PAUSE" : "&#9654; PLAY RUN";
+      if (chassis3DState.playing) {
+        const tel = getActiveChassisTelemetry();
+        if (chassis3DState.frameIdx >= tel.length - 1) {
+          chassis3DState.frameIdx = 0;
+        }
+        chassis3DState.lastTickMs = performance.now();
+        startChassisSmoothLoop();
+      }
+    });
+  }
+
+  const selSpeed = document.getElementById("selPlaySpeed");
+  if (selSpeed) {
+    selSpeed.addEventListener("change", (e) => {
+      chassis3DState.playSpeed = parseFloat(e.target.value) || 0.5;
+    });
+  }
+
+  // Quick-Jump Timeline Event Buttons
+  document.querySelectorAll(".btn-jump-t").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      jumpChassisTimelineToEvent(btn.dataset.jump);
+    });
+  });
+}
+
+function setChassisSubmoduleFocus(modId) {
+  chassis3DState.focusModule = modId;
+  document.querySelectorAll(".mod-focus-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.focus === modId);
+  });
+  const preset = MODULE_CAMERA_TARGETS[modId] || MODULE_CAMERA_TARGETS.all;
+  chassis3DState.goalTargetX = preset.x;
+  chassis3DState.goalTargetY = preset.y;
+  chassis3DState.goalTargetZ = preset.z;
+  chassis3DState.goalDist = preset.dist;
+  chassis3DState.goalYaw = preset.yaw;
+  chassis3DState.goalPitch = preset.pitch;
+  const badge = document.getElementById("badgeChassisActiveMod");
+  if (badge) badge.textContent = preset.label;
+  startChassisSmoothLoop();
+}
+
+function getActiveChassisRunObj() {
+  if (!lastSimResult) return null;
+  if (chassis3DState.activeRun === "B" && lastSimResult.run_b) {
+    return lastSimResult.run_b;
+  }
+  return lastSimResult.run_a;
+}
+
+function getActiveChassisTelemetry() {
+  const runObj = getActiveChassisRunObj();
+  return runObj && runObj.telemetry ? runObj.telemetry : [];
+}
+
+function syncChassisTimelineWithResult(data) {
+  if (!data) return;
+  const selRun = document.getElementById("selChassisRun");
+  if (selRun) {
+    if (!data.run_b) {
+      chassis3DState.activeRun = "A";
+      selRun.value = "A";
+    }
+  }
+  const tel = getActiveChassisTelemetry();
+  const rng = document.getElementById("rngChassisTimeline");
+  if (rng && tel.length > 0) {
+    rng.max = String(tel.length - 1);
+    // Default timeline cursor to launch + 1.8s (near 1->2 shift / peak G) if at 0
+    if (chassis3DState.frameIdx === 0 || chassis3DState.frameIdx >= tel.length) {
+      const launchIdx = tel.findIndex((s) => s.t >= 1.6);
+      chassis3DState.frameIdx = launchIdx >= 0 ? launchIdx : 0;
+    }
+    rng.value = String(chassis3DState.frameIdx);
+  }
+  renderChassis3DScene();
+}
+
+function jumpChassisTimelineToEvent(jumpType) {
+  const runObj = getActiveChassisRunObj();
+  if (!runObj || !runObj.telemetry || runObj.telemetry.length === 0) return;
+  const tel = runObj.telemetry;
+  const shifts = runObj.shifts || [];
+  let targetT = 0.05;
+
+  if (jumpType === "stall") {
+    targetT = -0.35;
+  } else if (jumpType === "launch") {
+    targetT = 0.06;
+  } else if (jumpType === "shift12") {
+    const s = shifts.find((sh) => sh.from_gear === 1);
+    targetT = s ? s.start_time_sec + 0.06 : 2.1;
+  } else if (jumpType === "shift23") {
+    const s = shifts.find((sh) => sh.from_gear === 2);
+    targetT = s ? s.start_time_sec + 0.06 : 4.2;
+  } else if (jumpType === "shift34") {
+    const s = shifts.find((sh) => sh.from_gear === 3);
+    targetT = s ? s.start_time_sec + 0.06 : 6.8;
+  } else if (jumpType === "finish") {
+    targetT = runObj.summary?.quarter_mile_sec > 0 ? runObj.summary.quarter_mile_sec : tel[tel.length - 1].t;
+  }
+
+  let bestIdx = 0;
+  let bestD = Infinity;
+  tel.forEach((s, idx) => {
+    const d = Math.abs(s.t - targetT);
+    if (d < bestD) {
+      bestD = d;
+      bestIdx = idx;
+    }
+  });
+  chassis3DState.frameIdx = bestIdx;
+  const rng = document.getElementById("rngChassisTimeline");
+  if (rng) rng.value = String(bestIdx);
+  hoverTimeSec = tel[bestIdx].t;
+  updateCursorReadout(hoverTimeSec);
+  renderChassis3DScene();
+  renderAllCharts();
+}
+
+function startChassisSmoothLoop() {
+  if (chassis3DState.animRafId) return;
+  chassis3DState.lastTickMs = performance.now();
+
+  const step = (nowMs) => {
+    const dtSec = Math.min(0.1, (nowMs - chassis3DState.lastTickMs) / 1000.0);
+    chassis3DState.lastTickMs = nowMs;
+
+    // Smooth camera interpolation toward goal
+    const lerp = 0.18;
+    let camMoving = false;
+    const dYaw = chassis3DState.goalYaw - chassis3DState.yaw;
+    const dPitch = chassis3DState.goalPitch - chassis3DState.pitch;
+    const dDist = chassis3DState.goalDist - chassis3DState.dist;
+    const dTx = chassis3DState.goalTargetX - chassis3DState.targetX;
+    const dTy = chassis3DState.goalTargetY - chassis3DState.targetY;
+    const dTz = chassis3DState.goalTargetZ - chassis3DState.targetZ;
+
+    if (
+      Math.abs(dYaw) > 0.002 ||
+      Math.abs(dPitch) > 0.002 ||
+      Math.abs(dDist) > 0.005 ||
+      Math.abs(dTx) > 0.002 ||
+      Math.abs(dTy) > 0.002 ||
+      Math.abs(dTz) > 0.002
+    ) {
+      chassis3DState.yaw += dYaw * lerp;
+      chassis3DState.pitch += dPitch * lerp;
+      chassis3DState.dist += dDist * lerp;
+      chassis3DState.targetX += dTx * lerp;
+      chassis3DState.targetY += dTy * lerp;
+      chassis3DState.targetZ += dTz * lerp;
+      camMoving = true;
+    }
+
+    // Advance timeline if playing
+    if (chassis3DState.playing) {
+      const tel = getActiveChassisTelemetry();
+      if (tel.length > 1) {
+        const curSample = tel[chassis3DState.frameIdx] || tel[0];
+        const nextT = curSample.t + dtSec * chassis3DState.playSpeed;
+        let nextIdx = chassis3DState.frameIdx;
+        while (nextIdx < tel.length - 1 && tel[nextIdx].t < nextT) {
+          nextIdx++;
+        }
+        chassis3DState.frameIdx = nextIdx;
+        const rng = document.getElementById("rngChassisTimeline");
+        if (rng) rng.value = String(nextIdx);
+        hoverTimeSec = tel[nextIdx].t;
+        updateCursorReadout(hoverTimeSec);
+
+        // Rotate wheels and advance airflow streamlines
+        const vfMs = (tel[nextIdx].v_wheel_f_kmh || 0) / 3.6;
+        const vrMs = (tel[nextIdx].v_wheel_r_kmh || 0) / 3.6;
+        chassis3DState.wheelAngleFront = (chassis3DState.wheelAngleFront + (vfMs / 0.334) * dtSec * 0.6) % (Math.PI * 2);
+        chassis3DState.wheelAngleRear = (chassis3DState.wheelAngleRear + (vrMs / 0.334) * dtSec * 0.6) % (Math.PI * 2);
+        chassis3DState.airflowPhase = (chassis3DState.airflowPhase + dtSec * (0.8 + (tel[nextIdx].v_mph || 0) * 0.025)) % 1.0;
+
+        renderAllCharts();
+        if (nextIdx >= tel.length - 1) {
+          chassis3DState.playing = false;
+          const btnPlay = document.getElementById("btnPlayTimeline");
+          if (btnPlay) btnPlay.innerHTML = "&#9654; PLAY RUN";
+        }
+      }
+    }
+
+    renderChassis3DScene();
+
+    if (chassis3DState.playing || camMoving) {
+      chassis3DState.animRafId = requestAnimationFrame(step);
+    } else {
+      chassis3DState.animRafId = null;
+    }
+  };
+
+  chassis3DState.animRafId = requestAnimationFrame(step);
+}
+
+// Convert normalized 0..100% stress/thermal index to glowing RGBA wireframe color
+function stressIndexToColor(pct, alpha = 1.0) {
+  const s = Math.max(0, Math.min(100, pct || 0));
+  let r = 0, g = 229, b = 255;
+  if (s < 35) {
+    // Cyan (#00e5ff) -> Emerald (#00e676)
+    const u = s / 35.0;
+    r = Math.round(0 * (1 - u) + 0 * u);
+    g = Math.round(229 * (1 - u) + 230 * u);
+    b = Math.round(255 * (1 - u) + 118 * u);
+  } else if (s < 70) {
+    // Emerald (#00e676) -> Amber (#ffab00)
+    const u = (s - 35.0) / 35.0;
+    r = Math.round(0 * (1 - u) + 255 * u);
+    g = Math.round(230 * (1 - u) + 171 * u);
+    b = Math.round(118 * (1 - u) + 0 * u);
+  } else {
+    // Amber (#ffab00) -> Critical Hot-Spot Red/Magenta (#ff2a2a)
+    const u = (s - 70.0) / 30.0;
+    r = 255;
+    g = Math.round(171 * (1 - u) + 38 * u);
+    b = Math.round(0 * (1 - u) + 48 * u);
+  }
+  return `rgba(${r},${g},${b},${alpha.toFixed(2)})`;
+}
+
+// Convert component temperature (deg C) into 0..100% thermal scale for temperature shader mode
+function tempToNormalizedPct(tempC, minC, maxC) {
+  return Math.max(0, Math.min(100, (((tempC || minC) - minC) / Math.max(1, maxC - minC)) * 100.0));
+}
+
+function renderChassis3DScene() {
+  const canvas = document.getElementById("canvasChassis3D");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  const tel = getActiveChassisTelemetry();
+  const sample = tel[chassis3DState.frameIdx] || tel[0] || {
+    t: 0,
+    v_mph: 0,
+    v_kmh: 0,
+    accel_g: 0,
+    gear: 1,
+    rpm: 2500,
+    eng_nm: 450,
+    boost_psi: 12,
+    emap_psi: 24,
+    brake_psi: 0,
+    awd_actual_nm: 500,
+    awd_split_pct: 40,
+    slip_r_pct: 5,
+    slip_f_pct: 3,
+    temp_engine_c: 86,
+    temp_egt_c: 650,
+    temp_iat_c: 32,
+    temp_trans_c: 82,
+    temp_awd_c: 62,
+    temp_rear_diff_c: 56,
+    temp_front_diff_c: 52,
+    temp_tire_r_c: 38,
+    temp_tire_f_c: 35,
+    tc_slip_kw: 15,
+    awd_slip_kw: 4,
+    stress_engine_pct: 45,
+    stress_trans_pct: 40,
+    stress_awd_pct: 42,
+    stress_drive_r_pct: 38,
+    stress_drive_f_pct: 30,
+    stress_tire_r_pct: 35,
+    stress_tire_f_pct: 28,
+  };
+
+  // Update timeline readout labels
+  const lblSec = document.getElementById("lblTimelineSec");
+  if (lblSec) {
+    const phaseTag =
+      sample.t < 0
+        ? "PRE-STAGE BRAKE STALL"
+        : sample.shift
+        ? `UPSHIFT INERTIA PHASE (GEAR ${sample.gear})`
+        : sample.t < 0.35
+        ? "LAUNCH BREAKAWAY"
+        : `WOT PULL (GEAR ${sample.gear})`;
+    lblSec.textContent = `t = ${sample.t >= 0 ? "+" : ""}${sample.t.toFixed(2)} s [${phaseTag}]`;
+  }
+  const lblState = document.getElementById("lblTimelineState");
+  if (lblState) {
+    lblState.textContent = `${sample.v_mph.toFixed(1)} mph (${sample.v_kmh.toFixed(1)} km/h) • ${Math.round(sample.rpm)} RPM • ${sample.accel_g.toFixed(2)} G • Boost: ${sample.boost_psi.toFixed(1)} psi • EMAP: ${(sample.emap_psi || 0).toFixed(1)} psi`;
+  }
+
+  // Update the 6 Sub-Module Inspector Cards on the right
+  renderSubmoduleInspectorCards(sample);
+
+  // Camera Basis Vectors
+  const cosY = Math.cos(chassis3DState.yaw);
+  const sinY = Math.sin(chassis3DState.yaw);
+  const cosP = Math.cos(chassis3DState.pitch);
+  const sinP = Math.sin(chassis3DState.pitch);
+  const fov = Math.min(w, h) * 1.05;
+
+  // Dynamic suspension squat pitch under longitudinal acceleration (nose rises, rear squats under +G)
+  const squatPitchRad = (sample.accel_g || 0) * 0.026;
+  const cosSq = Math.cos(squatPitchRad);
+  const sinSq = Math.sin(squatPitchRad);
+
+  const projectPoint = (x, y, z, applySquat = true) => {
+    let wx = x;
+    let wy = y;
+    let wz = z;
+    if (applySquat && y > 0.16) {
+      const rx = wx * cosSq - (wy - 0.33) * sinSq;
+      const ry = (wy - 0.33) * cosSq + wx * sinSq + 0.33;
+      wx = rx;
+      wy = ry;
+    }
+    const dx = wx - chassis3DState.targetX;
+    const dy = wy - chassis3DState.targetY;
+    const dz = wz - chassis3DState.targetZ;
+
+    // Rotate around Y (Yaw)
+    const x1 = dx * cosY - dz * sinY;
+    const z1 = dx * sinY + dz * cosY;
+    // Rotate around X (Pitch)
+    const y2 = dy * cosP - z1 * sinP;
+    const z2 = dy * sinP + z1 * cosP + chassis3DState.dist;
+
+    if (z2 < 0.25) return null;
+    const scale = fov / z2;
+    return {
+      sx: w * 0.5 + x1 * scale,
+      sy: h * 0.52 - y2 * scale,
+      depth: z2,
+      scale,
+    };
+  };
+
+  // 1. Draw Ground Reference Grid (Track Surface)
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(30, 41, 59, 0.55)";
+  for (let gx = -3.0; gx <= 3.0; gx += 0.5) {
+    const p1 = projectPoint(gx, 0.0, -1.35, false);
+    const p2 = projectPoint(gx, 0.0, 1.35, false);
+    if (p1 && p2) {
+      ctx.beginPath();
+      ctx.moveTo(p1.sx, p1.sy);
+      ctx.lineTo(p2.sx, p2.sy);
+      ctx.stroke();
+    }
+  }
+  for (let gz = -1.2; gz <= 1.2; gz += 0.4) {
+    const p1 = projectPoint(-3.0, 0.0, gz, false);
+    const p2 = projectPoint(3.0, 0.0, gz, false);
+    if (p1 && p2) {
+      ctx.beginPath();
+      ctx.moveTo(p1.sx, p1.sy);
+      ctx.lineTo(p2.sx, p2.sy);
+      ctx.stroke();
+    }
+  }
+
+  // Compute hot-spot values (0..100%) per sub-component based on shader mode (stress vs temp)
+  const isTempMode = chassis3DState.heatMode === "temp";
+  const heatVals = {
+    engine_block: isTempMode
+      ? tempToNormalizedPct(sample.temp_engine_c, 80, 112)
+      : sample.stress_engine_pct || 35,
+    turbos_emap: isTempMode
+      ? tempToNormalizedPct(sample.temp_egt_c, 420, 940)
+      : Math.min(100, (sample.stress_engine_pct || 35) * 0.55 + ((sample.emap_psi || 15) / 55.0) * 55.0),
+    fmic_intake: isTempMode
+      ? tempToNormalizedPct(sample.temp_iat_c, 18, 68)
+      : tempToNormalizedPct(sample.temp_iat_c, 18, 65),
+    trans_tc: isTempMode
+      ? tempToNormalizedPct(sample.temp_trans_c, 75, 118)
+      : Math.min(100, (sample.stress_trans_pct || 30) + ((sample.tc_slip_kw || 0) > 60 ? 18 : 0)),
+    trans_case: isTempMode
+      ? tempToNormalizedPct(sample.temp_trans_c, 75, 118)
+      : sample.stress_trans_pct || 30,
+    awd_case: isTempMode
+      ? tempToNormalizedPct(sample.temp_awd_c, 55, 115)
+      : sample.stress_awd_pct || 30,
+    driveline_f: isTempMode
+      ? tempToNormalizedPct(sample.temp_front_diff_c, 48, 95)
+      : sample.stress_drive_f_pct || 25,
+    driveline_r: isTempMode
+      ? tempToNormalizedPct(sample.temp_rear_diff_c, 50, 105)
+      : sample.stress_drive_r_pct || 35,
+    tire_f: isTempMode
+      ? tempToNormalizedPct(sample.temp_tire_f_c, 22, 75)
+      : sample.stress_tire_f_pct || 25,
+    tire_r: isTempMode
+      ? tempToNormalizedPct(sample.temp_tire_r_c, 22, 85)
+      : sample.stress_tire_r_pct || 35,
+    brakes: Math.min(100, ((sample.brake_psi || 0) / 1200.0) * 95.0),
+  };
+
+  // Build 3D wireframe line segments for Stinger GT body shell + 6 sub-modules
+  const airflowRestr = parseFloat(document.getElementById("inpAirflowRestrPct")?.value) || 0;
+  const segments = buildStingerWireframeSegments(sample, heatVals, airflowRestr);
+
+  // Project and depth-sort segments (Painter's algorithm back-to-front)
+  const projectedSegs = [];
+  const focus = chassis3DState.focusModule;
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    const p1 = projectPoint(seg.x1, seg.y1, seg.z1, seg.squat !== false);
+    const p2 = projectPoint(seg.x2, seg.y2, seg.z2, seg.squat !== false);
+    if (!p1 || !p2) continue;
+
+    let alpha = seg.alpha ?? 0.85;
+    let width = seg.width ?? 1.5;
+    if (focus !== "all") {
+      if (seg.module === focus) {
+        alpha = Math.min(1.0, alpha * 1.25);
+        width *= 1.35;
+      } else if (seg.module === "chassis") {
+        alpha = 0.09;
+        width = 0.8;
+      } else {
+        alpha = 0.14;
+        width = 0.9;
+      }
+    }
+
+    projectedSegs.push({
+      sx1: p1.sx,
+      sy1: p1.sy,
+      sx2: p2.sx,
+      sy2: p2.sy,
+      depth: (p1.depth + p2.depth) * 0.5,
+      color: seg.color || stressIndexToColor(seg.heat || 0, alpha),
+      width,
+      glow: seg.glow && (focus === "all" || seg.module === focus),
+    });
+  }
+
+  projectedSegs.sort((a, b) => b.depth - a.depth);
+
+  // Render sorted 3D wireframe segments
+  for (let i = 0; i < projectedSegs.length; i++) {
+    const s = projectedSegs[i];
+    ctx.beginPath();
+    ctx.moveTo(s.sx1, s.sy1);
+    ctx.lineTo(s.sx2, s.sy2);
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = s.width;
+    if (s.glow) {
+      ctx.shadowColor = s.color;
+      ctx.shadowBlur = 7;
+    } else {
+      ctx.shadowBlur = 0;
+    }
+    ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+
+  // Render 3D Sub-Module Floating Callout Pins & Hot-Spot Readouts
+  const callouts = [
+    {
+      mod: "engine",
+      x: 1.48,
+      y: 0.78,
+      z: 0.0,
+      title: "3.3T G6DP + TWIN TURBOS",
+      sub: `Stress ${(sample.stress_engine_pct || 0).toFixed(0)}% | EGT ${(sample.temp_egt_c || 0).toFixed(0)}°C | IAT ${(sample.temp_iat_c || 0).toFixed(0)}°C`,
+      heat: Math.max(heatVals.engine_block, heatVals.turbos_emap),
+    },
+    {
+      mod: "trans",
+      x: 0.58,
+      y: 0.58,
+      z: -0.15,
+      title: "A8LR1 8AT & CONVERTER",
+      sub: `Stress ${(sample.stress_trans_pct || 0).toFixed(0)}% | ATF ${(sample.temp_trans_c || 0).toFixed(1)}°C | Slip ${(sample.tc_slip_kw || 0).toFixed(0)}kW`,
+      heat: heatVals.trans_tc,
+    },
+    {
+      mod: "awd",
+      x: 0.04,
+      y: 0.52,
+      z: 0.22,
+      title: "MAGNA ATC AWD CASE",
+      sub: `Stress ${(sample.stress_awd_pct || 0).toFixed(0)}% | ${(sample.temp_awd_c || 0).toFixed(1)}°C | ${Math.round(sample.awd_actual_nm || 0)}Nm`,
+      heat: heatVals.awd_case,
+    },
+    {
+      mod: "driveline_f",
+      x: 1.15,
+      y: 0.25,
+      z: 0.42,
+      title: "FRONT DRIVELINE",
+      sub: `Stress ${(sample.stress_drive_f_pct || 0).toFixed(0)}% | Diff ${(sample.temp_front_diff_c || 0).toFixed(1)}°C`,
+      heat: heatVals.driveline_f,
+    },
+    {
+      mod: "driveline_r",
+      x: -1.25,
+      y: 0.48,
+      z: 0.0,
+      title: "REAR DRIVELINE & LSD",
+      sub: `Stress ${(sample.stress_drive_r_pct || 0).toFixed(0)}% | LSD ${(sample.temp_rear_diff_c || 0).toFixed(1)}°C`,
+      heat: heatVals.driveline_r,
+    },
+    {
+      mod: "tires",
+      x: -1.45,
+      y: 0.72,
+      z: 0.82,
+      title: "REAR TIRES (255/35R19)",
+      sub: `Stress ${(sample.stress_tire_r_pct || 0).toFixed(0)}% | Tread ${(sample.temp_tire_r_c || 0).toFixed(1)}°C | Slip ${(sample.slip_r_pct || 0).toFixed(1)}%`,
+      heat: heatVals.tire_r,
+    },
+  ];
+
+  callouts.forEach((c) => {
+    if (focus !== "all" && focus !== c.mod) return;
+    const pt = projectPoint(c.x, c.y, c.z, true);
+    if (!pt) return;
+    const col = stressIndexToColor(c.heat, 0.95);
+
+    // Pin dot
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(pt.sx, pt.sy, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Leader line & callout pill
+    const lx = pt.sx + 10;
+    const ly = pt.sy - 14;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(pt.sx, pt.sy);
+    ctx.lineTo(lx, ly);
+    ctx.stroke();
+
+    ctx.font = "bold 9.5px Consolas, monospace";
+    const w1 = ctx.measureText(c.title).width;
+    ctx.font = "9px Consolas, monospace";
+    const w2 = ctx.measureText(c.sub).width;
+    const boxW = Math.max(w1, w2) + 10;
+    const boxH = 26;
+
+    ctx.fillStyle = "rgba(6, 10, 18, 0.86)";
+    ctx.fillRect(lx, ly - boxH + 4, boxW, boxH);
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(lx, ly - boxH + 4, boxW, boxH);
+
+    ctx.fillStyle = col;
+    ctx.font = "bold 9.5px Consolas, monospace";
+    ctx.textAlign = "left";
+    ctx.fillText(c.title, lx + 5, ly - 11);
+    ctx.fillStyle = "#e2e8f0";
+    ctx.font = "9px Consolas, monospace";
+    ctx.fillText(c.sub, lx + 5, ly - 1);
+  });
+}
+
+// Construct the 3D Kia Stinger GT Fastback Chassis Shell + 6 Internal Powertrain Sub-Modules
+function buildStingerWireframeSegments(sample, heatVals, airflowRestrPct) {
+  const segs = [];
+
+  const addSeg = (x1, y1, z1, x2, y2, z2, opts) => {
+    segs.push({ x1, y1, z1, x2, y2, z2, ...opts });
+  };
+
+  const addBox = (cx, cy, cz, dx, dy, dz, opts) => {
+    const x0 = cx - dx / 2, x1 = cx + dx / 2;
+    const y0 = cy - dy / 2, y1 = cy + dy / 2;
+    const z0 = cz - dz / 2, z1 = cz + dz / 2;
+    // Bottom rectangle
+    addSeg(x0, y0, z0, x1, y0, z0, opts);
+    addSeg(x1, y0, z0, x1, y0, z1, opts);
+    addSeg(x1, y0, z1, x0, y0, z1, opts);
+    addSeg(x0, y0, z1, x0, y0, z0, opts);
+    // Top rectangle
+    addSeg(x0, y1, z0, x1, y1, z0, opts);
+    addSeg(x1, y1, z0, x1, y1, z1, opts);
+    addSeg(x1, y1, z1, x0, y1, z1, opts);
+    addSeg(x0, y1, z1, x0, y1, z0, opts);
+    // Vertical pillars
+    addSeg(x0, y0, z0, x0, y1, z0, opts);
+    addSeg(x1, y0, z0, x1, y1, z0, opts);
+    addSeg(x1, y0, z1, x1, y1, z1, opts);
+    addSeg(x0, y0, z1, x0, y1, z1, opts);
+  };
+
+  const addCylinderX = (x0, x1, cy, cz, r, sides, opts) => {
+    for (let i = 0; i < sides; i++) {
+      const a0 = (i / sides) * Math.PI * 2;
+      const a1 = ((i + 1) / sides) * Math.PI * 2;
+      const y0 = cy + Math.cos(a0) * r, z0 = cz + Math.sin(a0) * r;
+      const y1 = cy + Math.cos(a1) * r, z1 = cz + Math.sin(a1) * r;
+      addSeg(x0, y0, z0, x0, y1, z1, opts);
+      addSeg(x1, y0, z0, x1, y1, z1, opts);
+      if (i % 2 === 0) addSeg(x0, y0, z0, x1, y0, z0, opts);
+    }
+  };
+
+  const addCylinderZ = (cx, cy, z0, z1, r, sides, rotAngle, opts) => {
+    for (let i = 0; i < sides; i++) {
+      const a0 = rotAngle + (i / sides) * Math.PI * 2;
+      const a1 = rotAngle + ((i + 1) / sides) * Math.PI * 2;
+      const x0 = cx + Math.cos(a0) * r, y0 = cy + Math.sin(a0) * r;
+      const x1 = cx + Math.cos(a1) * r, y1 = cy + Math.sin(a1) * r;
+      addSeg(x0, y0, z0, x1, y1, z0, opts);
+      addSeg(x0, y0, z1, x1, y1, z1, opts);
+      addSeg(x0, y0, z0, x0, y0, z1, opts);
+    }
+  };
+
+  // ==========================================================================
+  // 0. KIA STINGER GT (CK) FASTBACK BODY WIREFRAME SHELL ("chassis")
+  // ==========================================================================
+  const chassisOpts = { module: "chassis", color: "rgba(56, 189, 248, 0.26)", width: 1.15 };
+  const chassisAccent = { module: "chassis", color: "rgba(56, 189, 248, 0.42)", width: 1.35 };
+
+  // Longitudinal profile stations [x, yBottom, yBeltline, yRoofCenter, zHalfWidth, zRoofWidth]
+  const bodyStations = [
+    [2.36, 0.17, 0.56, 0.58, 0.76, 0.62], // Front splitter & Tiger-Nose bumper
+    [2.12, 0.17, 0.72, 0.75, 0.86, 0.72], // Headlights & hood leading edge
+    [1.45, 0.18, 0.86, 0.89, 0.93, 0.80], // Front axle / strut towers
+    [0.82, 0.18, 0.93, 0.96, 0.92, 0.78], // Base of windshield / cowl
+    [0.15, 0.18, 0.96, 1.36, 0.91, 0.68], // Front header / A-pillar top
+    [-0.55, 0.18, 0.98, 1.38, 0.91, 0.67], // B-pillar roof peak
+    [-1.45, 0.19, 1.00, 1.24, 0.94, 0.64], // Rear axle / wide haunches / fastback C-pillar
+    [-2.15, 0.21, 0.97, 1.02, 0.86, 0.58], // Fastback rear glass taper
+    [-2.44, 0.25, 0.92, 0.95, 0.76, 0.54], // Ducktail liftback decklid & rear diffuser
+  ];
+
+  for (let i = 0; i < bodyStations.length; i++) {
+    const [x, yb, ym, yr, zw, zrw] = bodyStations[i];
+    // Cross-section ribs
+    addSeg(x, yb, -zw, x, yb, zw, chassisOpts);
+    addSeg(x, yb, -zw, x, ym, -zw, chassisOpts);
+    addSeg(x, yb, zw, x, ym, zw, chassisOpts);
+    addSeg(x, ym, -zw, x, yr, -zrw, chassisOpts);
+    addSeg(x, ym, zw, x, yr, zrw, chassisOpts);
+    addSeg(x, yr, -zrw, x, yr, zrw, chassisAccent);
+
+    if (i < bodyStations.length - 1) {
+      const [nx, nyb, nym, nyr, nzw, nzrw] = bodyStations[i + 1];
+      // Left & Right sills, beltlines, roof rails, and centerline spine
+      addSeg(x, yb, -zw, nx, nyb, -nzw, chassisOpts);
+      addSeg(x, yb, zw, nx, nyb, nzw, chassisOpts);
+      addSeg(x, ym, -zw, nx, nym, -nzw, chassisAccent);
+      addSeg(x, ym, zw, nx, nym, nzw, chassisAccent);
+      addSeg(x, yr, -zrw, nx, nyr, -nzrw, chassisAccent);
+      addSeg(x, yr, zrw, nx, nyr, nzrw, chassisAccent);
+      addSeg(x, yr, 0, nx, nyr, 0, chassisOpts);
+    }
+  }
+
+  // Kia Stinger Signature Tiger-Nose Grille & Dual Hood Vents
+  addBox(2.36, 0.42, 0.0, 0.04, 0.16, 0.82, chassisAccent);
+  addBox(1.58, 0.89, -0.34, 0.34, 0.02, 0.14, chassisAccent);
+  addBox(1.58, 0.89, 0.34, 0.34, 0.02, 0.14, chassisAccent);
+
+  // Quad Oval Stinger GT Exhaust Tips at Rear Diffuser (X = -2.46 m)
+  [-0.58, -0.44, 0.44, 0.58].forEach((zTip) => {
+    addCylinderX(-2.50, -2.35, 0.26, zTip, 0.045, 6, {
+      module: "engine",
+      heat: heatVals.turbos_emap,
+      width: 1.6,
+    });
+  });
+
+  // ==========================================================================
+  // 0b. COOLING AIRFLOW STREAMLINES (Sensitive to AirflowRestrictionPct)
+  // ==========================================================================
+  const afColor =
+    airflowRestrPct >= 50
+      ? "rgba(255, 82, 82, 0.65)"
+      : airflowRestrPct >= 20
+      ? "rgba(255, 171, 0, 0.65)"
+      : "rgba(0, 229, 255, 0.55)";
+  const phase = chassis3DState.airflowPhase || 0;
+  [-0.45, -0.22, 0.0, 0.22, 0.45].forEach((zStr) => {
+    const startX = 2.65 - phase * 0.45;
+    addSeg(startX, 0.34, zStr, startX - 0.28, 0.35, zStr, {
+      module: "engine",
+      color: afColor,
+      width: 1.5,
+    });
+    // Underbody cooling stream past transmission & AWD transfer case
+    const underX = 1.6 - phase * 1.4;
+    addSeg(underX, 0.16, zStr * 0.5, underX - 0.35, 0.16, zStr * 0.5, {
+      module: "awd",
+      color: afColor,
+      width: 1.2,
+    });
+  });
+
+  // ==========================================================================
+  // 1. SUB-MODULE: 3.3L V6 TWIN-TURBO ENGINE (G6DP), FMIC & EXHAUST ("engine")
+  // ==========================================================================
+  const engOpts = { module: "engine", heat: heatVals.engine_block, width: 1.85, glow: heatVals.engine_block > 72 };
+  const turboOpts = { module: "engine", heat: heatVals.turbos_emap, width: 2.1, glow: true };
+  const fmicOpts = { module: "engine", heat: heatVals.fmic_intake, width: 1.8 };
+
+  // Front-Mount Intercooler (FMIC) Core at X = +2.16m & Charge Pipes
+  addBox(2.16, 0.34, 0.0, 0.11, 0.24, 0.92, fmicOpts);
+  // Left & Right FMIC charge pipes to twin compressors & top intake plenum
+  addSeg(2.10, 0.34, -0.44, 1.45, 0.45, -0.38, fmicOpts);
+  addSeg(2.10, 0.34, 0.44, 1.45, 0.45, 0.38, fmicOpts);
+  addSeg(2.10, 0.44, 0.0, 1.52, 0.72, 0.0, fmicOpts);
+
+  // 3.3L 60-deg V6 Short Block & Deep-Skirt Bedplate (X = +1.12 .. +1.70m)
+  addBox(1.41, 0.44, 0.0, 0.56, 0.26, 0.38, engOpts);
+  // Left & Right V6 Cylinder Banks & Dual-CVVT Cam Covers
+  addBox(1.42, 0.60, -0.21, 0.52, 0.16, 0.20, engOpts);
+  addBox(1.42, 0.60, 0.21, 0.52, 0.16, 0.20, engOpts);
+  // Top Surge Tank / Twin-Throttle Intake Manifold Plenum
+  addBox(1.42, 0.73, 0.0, 0.44, 0.10, 0.26, engOpts);
+
+  // Twin Garrett MGT1549DSL / Hybrid Turbochargers (Left & Right Banks)
+  addCylinderX(1.22, 1.42, 0.46, -0.36, 0.11, 8, turboOpts);
+  addCylinderX(1.22, 1.42, 0.46, 0.36, 0.11, 8, turboOpts);
+
+  // Twin Downpipes & Mid-Pipes routing back to Quad Exhaust
+  addSeg(1.22, 0.44, -0.36, 0.85, 0.22, -0.26, turboOpts);
+  addSeg(1.22, 0.44, 0.36, 0.85, 0.22, 0.26, turboOpts);
+  addSeg(0.85, 0.22, -0.26, -2.35, 0.24, -0.48, { module: "engine", heat: heatVals.turbos_emap * 0.85, width: 1.5 });
+  addSeg(0.85, 0.22, 0.26, -2.35, 0.24, 0.48, { module: "engine", heat: heatVals.turbos_emap * 0.85, width: 1.5 });
+
+  // ==========================================================================
+  // 2. SUB-MODULE: A8LR1 8-SPEED AUTOMATIC & TORQUE CONVERTER ("trans")
+  // ==========================================================================
+  const tcOpts = { module: "trans", heat: heatVals.trans_tc, width: 2.1, glow: heatVals.trans_tc > 68 };
+  const transOpts = { module: "trans", heat: heatVals.trans_case, width: 1.85, glow: heatVals.trans_case > 72 };
+
+  // Hydrokinetic Torque Converter Housing & Torus (X = +0.86 .. +1.12m)
+  addCylinderX(0.86, 1.12, 0.38, 0.0, 0.18, 10, tcOpts);
+  // A8LR1 8-Speed Planetary Gearset Main Case (X = +0.22 .. +0.86m)
+  addCylinderX(0.22, 0.86, 0.38, 0.0, 0.15, 8, transOpts);
+  // Finned Aluminum ATF Oil Pan & Valvebody Sump underneath
+  addBox(0.54, 0.23, 0.0, 0.56, 0.07, 0.28, transOpts);
+
+  // ==========================================================================
+  // 3. SUB-MODULE: MAGNA ATC ACTIVE AWD TRANSFER CASE ("awd")
+  // ==========================================================================
+  const awdOpts = { module: "awd", heat: heatVals.awd_case, width: 2.15, glow: heatVals.awd_case > 65 };
+
+  // Main Transfer Case Housing (X = -0.14 .. +0.22m)
+  addBox(0.04, 0.36, 0.04, 0.34, 0.22, 0.32, awdOpts);
+  // Wet Multi-Plate Clutch Pack Drum (0..1000 Nm coupling)
+  addCylinderX(-0.10, 0.16, 0.38, 0.0, 0.13, 10, awdOpts);
+  // Offset Front Output Drop-Gear & VCM Electro-Hydraulic Pump Actuator (Right side Z = +0.22m)
+  addCylinderX(-0.08, 0.18, 0.33, 0.22, 0.10, 8, awdOpts);
+
+  // ==========================================================================
+  // 4. SUB-MODULE: FRONT DRIVELINE — PROPSHAFT, FRONT DIFF & HALFSHAFTS ("driveline_f")
+  // ==========================================================================
+  const drvFOpts = { module: "driveline_f", heat: heatVals.driveline_f, width: 1.85, glow: heatVals.driveline_f > 68 };
+
+  // Offset Front Propshaft from Magna ATC output (X = +0.18, Z = +0.22) to Front Diff (X = +1.45, Z = +0.12)
+  addCylinderX(0.18, 1.42, 0.33, 0.18, 0.045, 6, drvFOpts);
+  // Front Differential Housing (X = +1.45m, Y = 0.33m, Z = +0.08m)
+  addBox(1.45, 0.33, 0.08, 0.22, 0.20, 0.24, drvFOpts);
+  // Front Left & Right CV Halfshafts out to Front Wheel Hubs (Z = -0.78 .. +0.78m)
+  addSeg(1.45, 0.33, -0.04, 1.45, 0.33, -0.76, { ...drvFOpts, width: 2.3 });
+  addSeg(1.45, 0.33, 0.20, 1.45, 0.33, 0.76, { ...drvFOpts, width: 2.3 });
+
+  // ==========================================================================
+  // 5. SUB-MODULE: REAR DRIVELINE — PROPSHAFT, REAR LSD & HALFSHAFTS ("driveline_r")
+  // ==========================================================================
+  const drvROpts = { module: "driveline_r", heat: heatVals.driveline_r, width: 2.0, glow: heatVals.driveline_r > 68 };
+
+  // Two-Piece Rear Main Propshaft (X = -0.14 .. -1.34m) + Center Carrier Bearing at X = -0.72m
+  addCylinderX(-1.34, -0.14, 0.34, 0.0, 0.055, 6, drvROpts);
+  addBox(-0.72, 0.34, 0.0, 0.08, 0.14, 0.18, drvROpts);
+  // Rear Limited-Slip Differential (LSD) Finned Pumpkin (X = -1.45m, Y = 0.34m, Z = 0.0m)
+  addBox(-1.45, 0.34, 0.0, 0.28, 0.24, 0.30, drvROpts);
+  // Rear Heavy-Duty Left & Right Halfshafts out to Rear Wheel Hubs (Z = -0.78 .. +0.78m)
+  addCylinderZ(-1.45, 0.34, -0.76, -0.15, 0.038, 6, chassis3DState.wheelAngleRear, drvROpts);
+  addCylinderZ(-1.45, 0.34, 0.15, 0.76, 0.038, 6, chassis3DState.wheelAngleRear, drvROpts);
+
+  // ==========================================================================
+  // 6. SUB-MODULE: FRONT & REAR TIRES, WHEELS & BREMBO BRAKES ("tires")
+  // ==========================================================================
+  const tireFOpts = { module: "tires", heat: heatVals.tire_f, width: 1.85, squat: false, glow: heatVals.tire_f > 68 };
+  const tireROpts = { module: "tires", heat: heatVals.tire_r, width: 2.0, squat: false, glow: heatVals.tire_r > 68 };
+  const brakeOpts = {
+    module: "tires",
+    heat: Math.max(heatVals.brakes, 25),
+    width: 1.7,
+    squat: false,
+    glow: heatVals.brakes > 40,
+  };
+
+  // Front Left & Right Wheels (225/40R19 -> R = 0.334m, Width = 0.23m)
+  addCylinderZ(1.45, 0.334, -0.90, -0.67, 0.334, 14, chassis3DState.wheelAngleFront, tireFOpts);
+  addCylinderZ(1.45, 0.334, 0.67, 0.90, 0.334, 14, chassis3DState.wheelAngleFront, tireFOpts);
+  // Front Brembo Brake Rotors
+  addCylinderZ(1.45, 0.334, -0.74, -0.70, 0.19, 10, chassis3DState.wheelAngleFront, brakeOpts);
+  addCylinderZ(1.45, 0.334, 0.70, 0.74, 0.19, 10, chassis3DState.wheelAngleFront, brakeOpts);
+
+  // Rear Left & Right Wheels (255/35R19 -> R = 0.334m, Width = 0.26m)
+  addCylinderZ(-1.45, 0.334, -0.92, -0.66, 0.334, 14, chassis3DState.wheelAngleRear, tireROpts);
+  addCylinderZ(-1.45, 0.334, 0.66, 0.92, 0.334, 14, chassis3DState.wheelAngleRear, tireROpts);
+  // Rear Brembo Brake Rotors
+  addCylinderZ(-1.45, 0.334, -0.73, -0.69, 0.18, 10, chassis3DState.wheelAngleRear, brakeOpts);
+  addCylinderZ(-1.45, 0.334, 0.69, 0.73, 0.18, 10, chassis3DState.wheelAngleRear, brakeOpts);
+
+  return segs;
+}
+
+function renderSubmoduleInspectorCards(s) {
+  const stack = document.getElementById("submoduleCardsStack");
+  if (!stack || !s) return;
+
+  const cards = [
+    {
+      id: "engine",
+      name: "1. 3.3L Twin-Turbo V6 & FMIC",
+      stress: s.stress_engine_pct || 0,
+      tempLabel: `EGT ${(s.temp_egt_c || 0).toFixed(0)}&deg;C | IAT ${(s.temp_iat_c || 0).toFixed(1)}&deg;C`,
+      m1: `Torque: ${(s.eng_nm || 0).toFixed(0)} Nm @ ${Math.round(s.rpm || 0)} RPM`,
+      m2: `Boost: ${(s.boost_psi || 0).toFixed(1)} psi | EMAP: ${(s.emap_psi || 0).toFixed(1)} psi | KR: ${(s.kr_deg || 0).toFixed(1)}&deg;`,
+    },
+    {
+      id: "trans",
+      name: "2. A8LR1 8AT & Torque Converter",
+      stress: s.stress_trans_pct || 0,
+      tempLabel: `ATF ${(s.temp_trans_c || 0).toFixed(1)}&deg;C`,
+      m1: `Gear: ${s.gear || 1} ${s.shift ? "(SHIFT INERTIA PHASE)" : "(COUPLED)"}`,
+      m2: `TC/Clutch Slip Heat: ${(s.tc_slip_kw || 0).toFixed(1)} kW | Coolant: ${(s.temp_engine_c || 85).toFixed(1)}&deg;C`,
+    },
+    {
+      id: "awd",
+      name: "3. Magna ATC AWD Transfer Case",
+      stress: s.stress_awd_pct || 0,
+      tempLabel: `Clutch ${(s.temp_awd_c || 0).toFixed(1)}&deg;C`,
+      m1: `Coupling: ${(s.awd_actual_nm || 0).toFixed(0)} Nm (${(s.awd_split_pct || 0).toFixed(0)}% Front)`,
+      m2: `Clutch Slip Diss: ${(s.awd_slip_kw || 0).toFixed(1)} kW ${s.awd_brake_gated ? "| [64.5 PSI GATED]" : ""}`,
+    },
+    {
+      id: "driveline_f",
+      name: "4. Front Propshaft, Diff & Axles",
+      stress: s.stress_drive_f_pct || 0,
+      tempLabel: `Diff ${(s.temp_front_diff_c || 0).toFixed(1)}&deg;C`,
+      m1: `Front Prop Torque: ${(s.front_prop_nm || 0).toFixed(0)} Nm`,
+      m2: `Front Normal Load Fz: ${(s.fz_front_n || 0).toFixed(0)} N | Fx: ${(s.fx_front_n || 0).toFixed(0)} N`,
+    },
+    {
+      id: "driveline_r",
+      name: "5. Rear Propshaft, LSD & Axles",
+      stress: s.stress_drive_r_pct || 0,
+      tempLabel: `LSD ${(s.temp_rear_diff_c || 0).toFixed(1)}&deg;C`,
+      m1: `Rear Prop Torque: ${(s.rear_prop_nm || 0).toFixed(0)} Nm`,
+      m2: `Rear Normal Load Fz: ${(s.fz_rear_n || 0).toFixed(0)} N | Fx: ${(s.fx_rear_n || 0).toFixed(0)} N`,
+    },
+    {
+      id: "tires",
+      name: "6. Front & Rear Tires + Brakes",
+      stress: Math.max(s.stress_tire_r_pct || 0, s.stress_tire_f_pct || 0),
+      tempLabel: `R ${(s.temp_tire_r_c || 0).toFixed(1)}&deg;C | F ${(s.temp_tire_f_c || 0).toFixed(1)}&deg;C`,
+      m1: `Wheel Slip: Rear ${(s.slip_r_pct || 0).toFixed(1)}% | Front ${(s.slip_f_pct || 0).toFixed(1)}%`,
+      m2: `Grip mu: R ${(s.mu_rear || 0).toFixed(2)} / F ${(s.mu_front || 0).toFixed(2)} | Brake: ${(s.brake_psi || 0).toFixed(0)} psi`,
+    },
+  ];
+
+  stack.innerHTML = cards
+    .map((c) => {
+      const col = stressIndexToColor(c.stress, 1.0);
+      const isAct = chassis3DState.focusModule === c.id;
+      return `
+        <div class="submod-card ${isAct ? "active" : ""}" onclick="setChassisSubmoduleFocus('${c.id}')">
+          <div class="submod-top">
+            <span>${c.name}</span>
+            <span class="submod-temp-badge" style="color:${col}; border: 1px solid ${col};">${c.tempLabel}</span>
+          </div>
+          <div class="submod-bar-bg">
+            <div class="submod-bar-fill" style="width:${Math.min(100, c.stress).toFixed(1)}%; background:${col};"></div>
+          </div>
+          <div class="submod-metrics">
+            <span><strong>Stress: ${c.stress.toFixed(0)}%</strong> &bull; ${c.m1}</span>
+            <span>${c.m2}</span>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}

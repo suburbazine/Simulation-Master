@@ -258,5 +258,76 @@ func TestTurboWheelAndExhaustBackpressureModeling(t *testing.T) {
 	}
 }
 
+func TestChassisStressAndThermalModeling(t *testing.T) {
+	ecuBins, tcuBins, awdBins := DiscoverBinaries()
+	if len(ecuBins) < 2 || len(tcuBins) < 2 || len(awdBins) < 2 {
+		t.Skip("insufficient bins for chassis stress/thermal test")
+	}
 
+	// Compare Normal Cooling + Matched Tires vs. 75% Airflow Restriction + Staggered Radius Slip + Blocked Shift Cut (+12 deg)
+	envNormal := EnvironmentConfig{
+		SurfaceID:             "dry_street",
+		AmbientTempC:          25,
+		CoolantTempC:          85,
+		VehicleMassKg:         1890,
+		FrontTireRadius:       0.334,
+		RearTireRadius:        0.334,
+		SimDurationSec:        14.0,
+		AirflowRestrictionPct: 0,
+	}
 
+	shiftFloorBlocked := 12.0
+	runNormal := RunConfig{
+		Label:           "Normal Airflow + Matched Tires",
+		ECUBinPath:      ecuBins[1].Path,
+		TCUBinPath:      tcuBins[1].Path,
+		AWDBinPath:      awdBins[1].Path,
+		FuelType:        "93_aki",
+		TurboPreset:     "stock_mgt1549",
+		ExhaustType:     "stock_full_cats",
+		DriveMode:       "sport",
+		ESCMode:         "sport",
+		PreStageTimeSec: 1.4,
+		BrakeHoldPsi:    1200,
+		BrakeReleaseMs:  130,
+		PedalPct:        100,
+		Overrides:       OverrideConfig{TorqueScalePct: 100},
+	}
+
+	envRestricted := envNormal
+	envRestricted.AirflowRestrictionPct = 75.0
+	envRestricted.FrontTireRadius = 0.326
+	envRestricted.RearTireRadius = 0.342
+
+	runStressed := runNormal
+	runStressed.Label = "75% Restricted Airflow + Staggered Slip + Blocked Shift Cut"
+	runStressed.Overrides.ShiftSparkFloorDeg = &shiftFloorBlocked
+
+	respNormal, err := ExecuteSimulation(SimRequest{Environment: envNormal, RunA: runNormal})
+	if err != nil {
+		t.Fatalf("ExecuteSimulation normal failed: %v", err)
+	}
+	respStressed, err := ExecuteSimulation(SimRequest{Environment: envRestricted, RunA: runStressed})
+	if err != nil {
+		t.Fatalf("ExecuteSimulation stressed failed: %v", err)
+	}
+
+	sn := respNormal.RunA.Summary
+	ss := respStressed.RunA.Summary
+	t.Logf("Normal Run: PeakEGT=%.1fC | PeakTrans=%.1fC | PeakAWD=%.1fC | PeakRearTire=%.1fC | Stress(Eng/Trans/AWD/RearDrv)=%.0f%%/%.0f%%/%.0f%%/%.0f%%",
+		sn.PeakEGTC, sn.PeakTransTempC, sn.PeakAWDTempC, sn.PeakRearTireTempC,
+		sn.PeakStressEnginePct, sn.PeakStressTransPct, sn.PeakStressAWDPct, sn.PeakStressRearDrivePct)
+	t.Logf("Stressed Run: PeakEGT=%.1fC | PeakTrans=%.1fC | PeakAWD=%.1fC | PeakRearTire=%.1fC | Stress(Eng/Trans/AWD/RearDrv)=%.0f%%/%.0f%%/%.0f%%/%.0f%%",
+		ss.PeakEGTC, ss.PeakTransTempC, ss.PeakAWDTempC, ss.PeakRearTireTempC,
+		ss.PeakStressEnginePct, ss.PeakStressTransPct, ss.PeakStressAWDPct, ss.PeakStressRearDrivePct)
+
+	if ss.PeakTransTempC <= sn.PeakTransTempC {
+		t.Fatalf("Expected higher PeakTransTempC under restricted airflow + blocked shift torque cut (%.2f vs %.2f C)", ss.PeakTransTempC, sn.PeakTransTempC)
+	}
+	if ss.PeakAWDTempC <= sn.PeakAWDTempC {
+		t.Fatalf("Expected higher PeakAWDTempC under staggered tire slip + restricted airflow (%.2f vs %.2f C)", ss.PeakAWDTempC, sn.PeakAWDTempC)
+	}
+	if ss.PeakStressAWDPct <= sn.PeakStressAWDPct {
+		t.Fatalf("Expected higher PeakStressAWDPct under staggered tire slip (%.1f%% vs %.1f%%)", ss.PeakStressAWDPct, sn.PeakStressAWDPct)
+	}
+}

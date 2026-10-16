@@ -710,6 +710,29 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 		turboKRPM          = 35.0
 		etaComp            = 0.72
 
+		// Component Thermal State (deg C) & Slip Power (kW)
+		airflowRestrFrac   = math.Max(0.0, math.Min(0.85, env.AirflowRestrictionPct/100.0))
+		tempEngineC        = env.CoolantTempC
+		tempEGTC           = 410.0
+		tempIATC           = env.AmbientTempC + 6.0
+		tempTransC         = math.Max(68.0, env.CoolantTempC-10.0)
+		tempAWDC           = math.Max(58.0, env.AmbientTempC+35.0)
+		tempRearDiffC      = math.Max(55.0, env.AmbientTempC+32.0)
+		tempFrontDiffC     = math.Max(50.0, env.AmbientTempC+28.0)
+		tempRearTireC      = math.Max(28.0, env.AmbientTempC+14.0)
+		tempFrontTireC     = math.Max(26.0, env.AmbientTempC+12.0)
+		tcSlipPowerKW      = 0.0
+		awdSlipPowerKW     = 0.0
+
+		// Component Mechanical & Thermal Stress Indices (0..100%)
+		stressEnginePct     = 10.0
+		stressTransPct      = 8.0
+		stressAWDPct        = 5.0
+		stressRearDrivePct  = 5.0
+		stressFrontDrivePct = 5.0
+		stressRearTirePct   = 5.0
+		stressFrontTirePct  = 5.0
+
 		// ECU/TCU 10ms state
 		tqiDrvNm       = 0.0
 		tqiUncappedNm  = 0.0
@@ -954,7 +977,8 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 				ve = 1.00 - 0.07*((engineRPM-5400.0)/1200.0)
 			}
 			ve *= veCamMult * turboExh.VEFlowMult
-			effChargeTempK := math.Max(250.0, tAmbK-fuelSpec.LatentChargeCoolC+turboExh.CompTempPenaltyC)
+			fmicHeatSoakC := math.Max(0.0, tempIATC-env.AmbientTempC-14.0)
+			effChargeTempK := math.Max(250.0, tAmbK-fuelSpec.LatentChargeCoolC+turboExh.CompTempPenaltyC+0.60*fmicHeatSoakC)
 			tempDensityFactor := 293.15 / effChargeTempK
 			airloadMg = (boostHpa / 2717.0) * 1350.0 * ve * tempDensityFactor
 
@@ -972,9 +996,9 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 			igaOptDeg := Interp2D(ecu.IgnRPM, ecu.IgnLoad, ecu.IgnOptHigh, engineRPM, airloadMg)
 			igaMinMapDeg := Interp2D(ecu.IGAMinCoolant, ecu.IGAMinLoad, ecu.IGAMinHigh, env.CoolantTempC, airloadMg)
 
-			// Evaluate Fuel Octane + Exhaust Backpressure Residual Gas Knock Threshold & SIM2K-260 Knock Retard (krDeg)
+			// Evaluate Fuel Octane + Exhaust Backpressure Residual Gas + FMIC Heat Soak Knock Threshold & SIM2K-260 Knock Retard (krDeg)
 			// 93 AKI supports up to (igaOptDeg - 8.8 deg) at 20C and 1250 mg/stk before knock sensor feedback pulls timing.
-			knockCeilingDeg := (igaOptDeg - 8.8) + fuelSpec.OctaneSparkOffsetDeg - 0.11*(env.AmbientTempC-20.0+turboExh.CompTempPenaltyC) - 0.007*math.Max(0.0, airloadMg-1250.0) - turboExh.ResidualKnockPenaltyDeg
+			knockCeilingDeg := (igaOptDeg - 8.8) + fuelSpec.OctaneSparkOffsetDeg - 0.11*(env.AmbientTempC-20.0+turboExh.CompTempPenaltyC+0.75*fmicHeatSoakC) - 0.007*math.Max(0.0, airloadMg-1250.0) - turboExh.ResidualKnockPenaltyDeg
 			if igaCommandedDeg > knockCeilingDeg && airloadMg > 650.0 {
 				krDeg = math.Min(9.0, 0.80*(igaCommandedDeg-knockCeilingDeg))
 			} else {
@@ -1305,15 +1329,141 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 		}
 
 		// Track shift jerk & min G
+		stepJerkGPerS := 0.0
 		if shiftActive && curShiftEvent != nil {
 			if accelG < curShiftEvent.MinAccelG {
 				curShiftEvent.MinAccelG = round2(accelG)
 			}
 			jerk := math.Abs(accelG-prevAccelG) / dt
+			stepJerkGPerS = jerk
 			if jerk > curShiftEvent.PeakJerkGPerS {
 				curShiftEvent.PeakJerkGPerS = round2(jerk)
 			}
 		}
+
+		// =========================================================================
+		// 6. Sub-Module Thermal Integration (deg C) & Mechanical Stress Hot-Spots (0..100%)
+		// =========================================================================
+		vMph = vCarMs * 2.23693629
+		vKmh = vCarMs * 3.6
+		// Airflow cooling coefficient scales with vehicle speed and is degraded by AirflowRestrictionPct
+		airflowFactor := (1.0 - 0.85*airflowRestrFrac) * (0.15 + 0.85*math.Min(1.0, vCarMs/45.0))
+
+		// 6a. Engine Block, Twin-Turbo EGT & FMIC Intake Air Temp (IAT)
+		// Retarded spark (antilag or knock retard) and high EMAP backpressure dump huge thermal energy into the exhaust manifolds
+		sparkRetardFromOpt := math.Max(0.0, (igaBaseDeg+krDeg+2.5)-igaActualDeg)
+		targetEGTC := 340.0 + 0.036*engineRPM + 0.16*math.Max(0.0, airloadMg-300.0) + 2.4*emapPsi + 9.5*sparkRetardFromOpt - 1.5*fuelSpec.LatentChargeCoolC + 22.0*airflowRestrFrac
+		if ralActive {
+			targetEGTC += 85.0 // Launch antilag builds turbine heat rapidly
+		}
+		tauEGT := 0.55
+		tempEGTC += (dt / tauEGT) * (targetEGTC - tempEGTC)
+
+		// Compressor discharge temp vs FMIC intercooler effectiveness (degraded by airflow restriction & low vehicle speed)
+		prComp := math.Max(1.0, boostHpa/math.Max(700.0, ambientHpa))
+		tCompOutC := env.AmbientTempC + (tAmbK*(math.Pow(prComp, 0.2857)-1.0))/math.Max(0.52, etaComp)
+		fmicEff := (0.78 - 0.52*airflowRestrFrac) * (0.45 + 0.55*math.Min(1.0, vCarMs/35.0))
+		targetIATC := env.AmbientTempC + (1.0-fmicEff)*(tCompOutC-env.AmbientTempC) - 0.35*fuelSpec.LatentChargeCoolC
+		tempIATC += (dt / 0.85) * (targetIATC - tempIATC)
+
+		// Engine block/coolant jacket temperature
+		engHeatInputDegPerS := (actualEngNm*engineRPM/9549.0)*0.0085 + 0.0018*math.Max(0.0, tempEGTC-500.0)
+		engCoolDegPerS := airflowFactor * 0.095 * math.Max(0.0, tempEngineC-env.CoolantTempC)
+		tempEngineC += (engHeatInputDegPerS - engCoolDegPerS) * dt
+
+		// 6b. 8AT Transmission Fluid & Clutch Pack / Torque Converter Slip Dissipation
+		turbineTorqueNm := actualEngNm * tcTorqueRatio
+		omegaEngRad := engineRPM * 2.0 * math.Pi / 60.0
+		omegaTurbRad := turbineRPM * 2.0 * math.Pi / 60.0
+		pEngKW := math.Max(0.0, actualEngNm*omegaEngRad/1000.0)
+		pTurbKW := math.Max(0.0, turbineTorqueNm*omegaTurbRad/1000.0)
+		tcHydroSlipKW := math.Max(0.0, pEngKW-pTurbKW) + 0.042*pTurbKW
+		if tSec < 0 {
+			// During brake-stand stall, engine power at converter stall speed shears ATF inside the torque converter
+			tcHydroSlipKW = 0.45 * pEngKW
+		}
+		shiftClutchSlipKW := 0.0
+		if shiftActive {
+			// During inertia-phase upshift, oncoming clutch packs absorb kinetic energy + un-cut engine torque
+			// When Shift Spark Floor (0x207AD9) blocks the torque cut, clutch pack thermal dissipation spikes dramatically
+			uncutRatio := actualEngNm / math.Max(150.0, tqiUncappedNm)
+			shiftClutchSlipKW = 28.0 + 0.145*actualEngNm*(0.5+1.8*uncutRatio)
+		}
+		tcSlipPowerKW = tcHydroSlipKW + shiftClutchSlipKW
+		// ATF thermal mass integration (~16 kJ/C effective localized fluid + clutch housing thermal capacity)
+		transHeatDegPerS := tcSlipPowerKW / 14.5
+		transCoolDegPerS := airflowFactor * 0.048 * math.Max(0.0, tempTransC-75.0)
+		tempTransC += (transHeatDegPerS - transCoolDegPerS) * dt
+
+		// 6c. Magna ATC Active AWD Wet Multi-Plate Transfer Clutch Slip & Thermal Load
+		// Slip across the transfer case comes from front/rear axle speed difference (wheelspin or staggered tire radius mismatch)
+		omegaDiffAWD := math.Abs(omegaRear - omegaFront)
+		awdSlipPowerKW = (awdActualNm * omegaDiffAWD) / 1000.0
+		// Even with small macro slip, high clamping pressure under micro-scrub generates localized friction heat in the wet clutch pack
+		awdMicroScrubKW := 0.0045 * awdActualNm * (0.2 + 0.8*math.Min(1.0, vCarMs/30.0))
+		awdHeatDegPerS := (awdSlipPowerKW + awdMicroScrubKW) / 3.2
+		awdCoolDegPerS := airflowFactor * 0.065 * math.Max(0.0, tempAWDC-55.0)
+		tempAWDC += (awdHeatDegPerS - awdCoolDegPerS) * dt
+
+		// 6d. Rear & Front Differential / Driveline Thermal Integration
+		rearMeshLossKW := 0.028 * (math.Abs(rearPropShaftNm) * omegaRear / 1000.0)
+		rearLSDHeatKW := 0.015 * math.Abs(rearPropShaftNm) * kappaRear
+		tempRearDiffC += ((rearMeshLossKW+rearLSDHeatKW)/6.5 - airflowFactor*0.05*math.Max(0.0, tempRearDiffC-52.0)) * dt
+
+		frontMeshLossKW := 0.028 * (math.Abs(frontPropShaftNm) * omegaFront / 1000.0)
+		frontSlipHeatKW := 0.012 * math.Abs(frontPropShaftNm) * kappaFront
+		tempFrontDiffC += ((frontMeshLossKW+frontSlipHeatKW)/5.0 - airflowFactor*0.05*math.Max(0.0, tempFrontDiffC-48.0)) * dt
+
+		// 6e. Rear & Front Tire Tread/Carcass Frictional Slip Heating
+		trackBaseTempC := env.AmbientTempC + 6.0
+		vSlipRearMs := math.Abs(omegaRear*rRear - vCarMs)
+		vSlipFrontMs := math.Abs(omegaFront*rFront - vCarMs)
+		tireRearSlipKW := (fxRear * vSlipRearMs) / 1000.0
+		tireFrontSlipKW := (fxFront * vSlipFrontMs) / 1000.0
+		tireRollingRearKW := 0.011 * fzRear * vCarMs / 1000.0
+		tireRollingFrontKW := 0.011 * fzFront * vCarMs / 1000.0
+		tempRearTireC += ((tireRearSlipKW*0.42+tireRollingRearKW*0.08) - (0.04+0.09*math.Min(1.0, vCarMs/40.0))*math.Max(0.0, tempRearTireC-trackBaseTempC)) * dt
+		tempFrontTireC += ((tireFrontSlipKW*0.42+tireRollingFrontKW*0.08) - (0.04+0.09*math.Min(1.0, vCarMs/40.0))*math.Max(0.0, tempFrontTireC-trackBaseTempC)) * dt
+
+		// 6f. Normalized Component Mechanical + Thermal Stress Hot-Spot Indices (0..100%)
+		// Engine Stress: cylinder brake torque + EMAP backpressure + knock retard + EGT thermal load
+		stressEnginePct = math.Min(100.0,
+			46.0*(actualEngNm/780.0)+
+				24.0*(emapPsi/58.0)+
+				16.0*(krDeg/6.0)+
+				14.0*math.Max(0.0, (tempEGTC-550.0)/420.0))
+
+		// Transmission Stress: input torque + torque converter / shift clutch slip power + ATF temperature
+		stressTransPct = math.Min(100.0,
+			40.0*(turbineTorqueNm/1150.0)+
+				38.0*(tcSlipPowerKW/135.0)+
+				22.0*math.Max(0.0, (tempTransC-80.0)/55.0))
+
+		// AWD Transfer Case Stress: coupling torque + clutch slip dissipation + clutch pack temp
+		stressAWDPct = math.Min(100.0,
+			50.0*(awdActualNm/850.0)+
+				30.0*(awdSlipPowerKW/28.0)+
+				20.0*math.Max(0.0, (tempAWDC-60.0)/85.0))
+
+		// Rear & Front Driveline (Propshaft / Diff / Halfshafts) Stress: axle torque + shift shock jerk + diff temp
+		stressRearDrivePct = math.Min(100.0,
+			64.0*(rearWheelDriveNm/8200.0)+
+				24.0*(stepJerkGPerS/12.0)+
+				12.0*math.Max(0.0, (tempRearDiffC-55.0)/65.0))
+		stressFrontDrivePct = math.Min(100.0,
+			68.0*(frontWheelDriveNm/4800.0)+
+				20.0*(stepJerkGPerS/12.0)+
+				12.0*math.Max(0.0, (tempFrontDiffC-50.0)/65.0))
+
+		// Rear & Front Tire Stress: tractive shear + wheelspin slip ratio + tread temperature
+		stressRearTirePct = math.Min(100.0,
+			42.0*(fxRear/13500.0)+
+				38.0*math.Min(1.0, kappaRear/0.25)+
+				20.0*math.Max(0.0, (tempRearTireC-35.0)/65.0))
+		stressFrontTirePct = math.Min(100.0,
+			45.0*(fxFront/9500.0)+
+				35.0*math.Min(1.0, kappaFront/0.25)+
+				20.0*math.Max(0.0, (tempFrontTireC-35.0)/65.0))
 
 		// Update Performance Summary Milestones
 		if tSec >= 0 {
@@ -1401,6 +1551,30 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 			if turboKRPM > summary.PeakTurboSpeedKRPM {
 				summary.PeakTurboSpeedKRPM = round2(turboKRPM)
 			}
+			if tempEGTC > summary.PeakEGTC {
+				summary.PeakEGTC = round2(tempEGTC)
+			}
+			if tempTransC > summary.PeakTransTempC {
+				summary.PeakTransTempC = round2(tempTransC)
+			}
+			if tempAWDC > summary.PeakAWDTempC {
+				summary.PeakAWDTempC = round2(tempAWDC)
+			}
+			if tempRearTireC > summary.PeakRearTireTempC {
+				summary.PeakRearTireTempC = round2(tempRearTireC)
+			}
+			if stressEnginePct > summary.PeakStressEnginePct {
+				summary.PeakStressEnginePct = round2(stressEnginePct)
+			}
+			if stressTransPct > summary.PeakStressTransPct {
+				summary.PeakStressTransPct = round2(stressTransPct)
+			}
+			if stressAWDPct > summary.PeakStressAWDPct {
+				summary.PeakStressAWDPct = round2(stressAWDPct)
+			}
+			if stressRearDrivePct > summary.PeakStressRearDrivePct {
+				summary.PeakStressRearDrivePct = round2(stressRearDrivePct)
+			}
 			if vKmh > summary.TopSpeedKmh {
 				summary.TopSpeedKmh = round2(vKmh)
 				summary.TopSpeedMph = round2(vMph)
@@ -1411,57 +1585,75 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 		if step%20 == 0 {
 			boostPsi := (boostHpa - ambientHpa) * 0.0145038
 			telemetry = append(telemetry, TelemetrySample{
-				TimeSec:            round3(tSec),
-				DistanceM:          round2(distM),
-				DistanceFt:         round2(distM * 3.28084),
-				SpeedKmh:           round2(vKmh),
-				SpeedMph:           round2(vMph),
-				AccelG:             round3(accelG),
-				Gear:               gear,
-				ShiftActive:        shiftActive,
-				EngineRPM:          round2(engineRPM),
-				TurbineRPM:         round2(turbineRPM),
-				PedalPct:           round2(cfg.PedalPct),
-				BrakePsi:           round2(brakePsi),
-				BoostHpa:           round2(boostHpa),
-				BoostPsi:           round2(boostPsi),
-				BoostTargetPsi:     round2(boostTargetPsi),
-				EMAPPsi:            round2(emapPsi),
-				ExhBackpressurePsi: round2(exhBackpressurePsi),
-				DrivePressureRatio: round2(drivePressureRatio),
-				TurboSpeedKRPM:     round2(turboKRPM),
-				CompEfficiency:     round3(etaComp),
-				AirloadMgStk:       round2(airloadMg),
-				DriverDemandNm:     round2(tqiDrvNm),
-				UncappedTorqueNm:   round2(tqiUncappedNm),
-				TCUTorqueLimitNm:   round2(tcuLimitNm),
-				ActualEngineNm:     round2(actualEngNm),
-				SparkAdvanceDeg:    round2(igaActualDeg),
-				SparkFloorDeg:      round2(igaFloorDeg),
-				SparkEfficiency:    round3(etaIga),
-				KnockRetardDeg:     round2(krDeg),
-				IntakeCamDeg:       round2(camInDeg),
-				ExhaustCamDeg:      round2(camExDeg),
-				CamOverlapDeg:      round2(camOverlapDeg),
-				Lambda:             round3(fuelSpec.CommandedLambda),
-				AWDTargetNm:        round2(awdTargetNm),
-				AWDActualNm:        round2(awdActualNm),
-				AWDFrontSplitPct:   round2(awdSplitPct),
-				AWDBrakeGated:      awdBrakeGated,
-				FrontPropTorqueNm:  round2(frontPropShaftNm),
-				RearPropTorqueNm:   round2(rearPropShaftNm),
-				FrontNormalLoadN:   round2(fzFront),
-				RearNormalLoadN:    round2(fzRear),
-				FrontWheelKmh:      round2(omegaFront * rFront * 3.6),
-				RearWheelKmh:       round2(omegaRear * rRear * 3.6),
-				FrontSlipPct:       round2(kappaFront * 100.0),
-				RearSlipPct:        round2(kappaRear * 100.0),
-				FrontMu:            round3(muFront),
-				RearMu:             round3(muRear),
-				FrontTractiveN:     round2(fxFront),
-				RearTractiveN:      round2(fxRear),
-				TCSActive:          tcsActive,
-				TCHACutActive:      tchaActiveFlag,
+				TimeSec:              round3(tSec),
+				DistanceM:            round2(distM),
+				DistanceFt:           round2(distM * 3.28084),
+				SpeedKmh:             round2(vKmh),
+				SpeedMph:             round2(vMph),
+				AccelG:               round3(accelG),
+				Gear:                 gear,
+				ShiftActive:          shiftActive,
+				EngineRPM:            round2(engineRPM),
+				TurbineRPM:           round2(turbineRPM),
+				PedalPct:             round2(cfg.PedalPct),
+				BrakePsi:             round2(brakePsi),
+				BoostHpa:             round2(boostHpa),
+				BoostPsi:             round2(boostPsi),
+				BoostTargetPsi:       round2(boostTargetPsi),
+				EMAPPsi:              round2(emapPsi),
+				ExhBackpressurePsi:   round2(exhBackpressurePsi),
+				DrivePressureRatio:   round2(drivePressureRatio),
+				TurboSpeedKRPM:       round2(turboKRPM),
+				CompEfficiency:       round3(etaComp),
+				AirloadMgStk:         round2(airloadMg),
+				DriverDemandNm:       round2(tqiDrvNm),
+				UncappedTorqueNm:     round2(tqiUncappedNm),
+				TCUTorqueLimitNm:     round2(tcuLimitNm),
+				ActualEngineNm:       round2(actualEngNm),
+				SparkAdvanceDeg:      round2(igaActualDeg),
+				SparkFloorDeg:        round2(igaFloorDeg),
+				SparkEfficiency:      round3(etaIga),
+				KnockRetardDeg:       round2(krDeg),
+				IntakeCamDeg:         round2(camInDeg),
+				ExhaustCamDeg:        round2(camExDeg),
+				CamOverlapDeg:        round2(camOverlapDeg),
+				Lambda:               round3(fuelSpec.CommandedLambda),
+				AWDTargetNm:          round2(awdTargetNm),
+				AWDActualNm:          round2(awdActualNm),
+				AWDFrontSplitPct:     round2(awdSplitPct),
+				AWDBrakeGated:        awdBrakeGated,
+				FrontPropTorqueNm:    round2(frontPropShaftNm),
+				RearPropTorqueNm:     round2(rearPropShaftNm),
+				FrontNormalLoadN:     round2(fzFront),
+				RearNormalLoadN:      round2(fzRear),
+				FrontWheelKmh:        round2(omegaFront * rFront * 3.6),
+				RearWheelKmh:         round2(omegaRear * rRear * 3.6),
+				FrontSlipPct:         round2(kappaFront * 100.0),
+				RearSlipPct:          round2(kappaRear * 100.0),
+				FrontMu:              round3(muFront),
+				RearMu:               round3(muRear),
+				FrontTractiveN:       round2(fxFront),
+				RearTractiveN:        round2(fxRear),
+				TCSActive:            tcsActive,
+				TCHACutActive:        tchaActiveFlag,
+				EngineBlockTempC:     round2(tempEngineC),
+				ExhaustManifoldTempC: round2(tempEGTC),
+				IntakeAirTempC:       round2(tempIATC),
+				TransFluidTempC:      round2(tempTransC),
+				AWDClutchTempC:       round2(tempAWDC),
+				RearDiffTempC:        round2(tempRearDiffC),
+				FrontDiffTempC:       round2(tempFrontDiffC),
+				RearTireTempC:        round2(tempRearTireC),
+				FrontTireTempC:       round2(tempFrontTireC),
+				TCSlipPowerKW:        round2(tcSlipPowerKW),
+				AWDSlipPowerKW:       round2(awdSlipPowerKW),
+				StressEnginePct:      round2(stressEnginePct),
+				StressTransPct:       round2(stressTransPct),
+				StressAWDPct:         round2(stressAWDPct),
+				StressRearDrivePct:   round2(stressRearDrivePct),
+				StressFrontDrivePct:  round2(stressFrontDrivePct),
+				StressRearTirePct:    round2(stressRearTirePct),
+				StressFrontTirePct:   round2(stressFrontTirePct),
 			})
 		}
 	}

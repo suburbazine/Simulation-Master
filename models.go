@@ -60,23 +60,24 @@ type InventoryResponse struct {
 	Presets   []ScenarioPreset `json:"presets"`
 }
 
-// EnvironmentConfig controls road surface, atmosphere, and vehicle chassis parameters.
+// EnvironmentConfig controls road surface, atmosphere, cooling airflow restriction, and vehicle chassis parameters.
 type EnvironmentConfig struct {
-	SurfaceID       string  `json:"surface_id"`
-	CustomMuPeak    float64 `json:"custom_mu_peak"`    // Optional override if > 0
-	CustomMuSlide   float64 `json:"custom_mu_slide"`   // Optional override if > 0
-	CustomKappaPeak float64 `json:"custom_kappa_peak"` // Optional override if > 0
-	RoadGradePct    float64 `json:"road_grade_pct"`    // Grade in %
-	AmbientTempC    float64 `json:"ambient_temp_c"`    // Ambient temperature in C
-	CoolantTempC    float64 `json:"coolant_temp_c"`    // Engine coolant temp in C (default 85C)
-	AltitudeM       float64 `json:"altitude_m"`        // Altitude above sea level in meters
-	HeadwindKmh     float64 `json:"headwind_kmh"`      // Headwind speed in km/h
-	VehicleMassKg   float64 `json:"vehicle_mass_kg"`   // Curb + driver mass (default 1915 kg)
-	CGHeightM       float64 `json:"cg_height_m"`       // Center of gravity height (default 0.51 m)
-	StaticFrontPct  float64 `json:"static_front_pct"`  // Static front weight distribution % (default 52.0)
-	FrontTireRadius float64 `json:"front_tire_radius"` // Physical front rolling radius in meters (default 0.334)
-	RearTireRadius  float64 `json:"rear_tire_radius"`  // Physical rear rolling radius in meters (default 0.336)
-	SimDurationSec  float64 `json:"sim_duration_sec"`  // Max simulation duration after brake release (default 18.0 s)
+	SurfaceID             string  `json:"surface_id"`
+	CustomMuPeak          float64 `json:"custom_mu_peak"`            // Optional override if > 0
+	CustomMuSlide         float64 `json:"custom_mu_slide"`           // Optional override if > 0
+	CustomKappaPeak       float64 `json:"custom_kappa_peak"`         // Optional override if > 0
+	RoadGradePct          float64 `json:"road_grade_pct"`            // Grade in %
+	AmbientTempC          float64 `json:"ambient_temp_c"`            // Ambient temperature in C
+	CoolantTempC          float64 `json:"coolant_temp_c"`            // Engine coolant temp in C (default 85C)
+	AirflowRestrictionPct float64 `json:"airflow_restriction_pct"`   // Cooling/FMIC/Underbody airflow restriction % (0 = open, 60 = heat-soaked/blocked)
+	AltitudeM             float64 `json:"altitude_m"`                // Altitude above sea level in meters
+	HeadwindKmh           float64 `json:"headwind_kmh"`              // Headwind speed in km/h
+	VehicleMassKg         float64 `json:"vehicle_mass_kg"`           // Curb + driver mass (default 1915 kg)
+	CGHeightM             float64 `json:"cg_height_m"`               // Center of gravity height (default 0.51 m)
+	StaticFrontPct        float64 `json:"static_front_pct"`          // Static front weight distribution % (default 52.0)
+	FrontTireRadius       float64 `json:"front_tire_radius"`         // Physical front rolling radius in meters (default 0.334)
+	RearTireRadius        float64 `json:"rear_tire_radius"`          // Physical rear rolling radius in meters (default 0.336)
+	SimDurationSec        float64 `json:"sim_duration_sec"`          // Max simulation duration after brake release (default 18.0 s)
 }
 
 // OverrideConfig allows non-destructive live A/B what-if tuning on top of any loaded binary.
@@ -216,6 +217,14 @@ type PerformanceSummary struct {
 	PeakEMAPPsi            float64 `json:"peak_emap_psi"`
 	PeakExhBackpressurePsi float64 `json:"peak_exh_backpressure_psi"`
 	PeakTurboSpeedKRPM     float64 `json:"peak_turbo_krpm"`
+	PeakEGTC               float64 `json:"peak_egt_c"`
+	PeakTransTempC         float64 `json:"peak_trans_c"`
+	PeakAWDTempC           float64 `json:"peak_awd_c"`
+	PeakRearTireTempC      float64 `json:"peak_tire_r_c"`
+	PeakStressEnginePct    float64 `json:"peak_stress_engine_pct"`
+	PeakStressTransPct     float64 `json:"peak_stress_trans_pct"`
+	PeakStressAWDPct       float64 `json:"peak_stress_awd_pct"`
+	PeakStressRearDrivePct float64 `json:"peak_stress_drive_r_pct"`
 	TopSpeedKmh            float64 `json:"top_speed_kmh"`
 	TopSpeedMph            float64 `json:"top_speed_mph"`
 }
@@ -293,6 +302,28 @@ type TelemetrySample struct {
 	RearTractiveN      float64 `json:"fx_rear_n"`
 	TCSActive          bool    `json:"tcs_active"`
 	TCHACutActive      bool    `json:"tcha_active"`
+
+	// Component Temperatures (deg C) & Slip Dissipation (kW)
+	EngineBlockTempC     float64 `json:"temp_engine_c"`
+	ExhaustManifoldTempC float64 `json:"temp_egt_c"`
+	IntakeAirTempC       float64 `json:"temp_iat_c"`
+	TransFluidTempC      float64 `json:"temp_trans_c"`
+	AWDClutchTempC       float64 `json:"temp_awd_c"`
+	RearDiffTempC        float64 `json:"temp_rear_diff_c"`
+	FrontDiffTempC       float64 `json:"temp_front_diff_c"`
+	RearTireTempC        float64 `json:"temp_tire_r_c"`
+	FrontTireTempC       float64 `json:"temp_tire_f_c"`
+	TCSlipPowerKW        float64 `json:"tc_slip_kw"`
+	AWDSlipPowerKW       float64 `json:"awd_slip_kw"`
+
+	// Component Mechanical & Thermal Stress Indices (0..100%)
+	StressEnginePct     float64 `json:"stress_engine_pct"`
+	StressTransPct      float64 `json:"stress_trans_pct"`
+	StressAWDPct        float64 `json:"stress_awd_pct"`
+	StressRearDrivePct  float64 `json:"stress_drive_r_pct"`
+	StressFrontDrivePct float64 `json:"stress_drive_f_pct"`
+	StressRearTirePct   float64 `json:"stress_tire_r_pct"`
+	StressFrontTirePct  float64 `json:"stress_tire_f_pct"`
 }
 
 //MuSlipCurvePoint represents a point on the active surface's tire friction curve.
