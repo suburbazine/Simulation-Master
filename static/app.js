@@ -1636,17 +1636,17 @@ function formatBytes(bytes) {
 // INTERACTIVE 3D KIA STINGER GT (CK) WIREFRAME, SUB-MODULE STRESS & THERMAL STUDIO
 // ============================================================================
 const chassis3DState = {
-  yaw: -0.62,
+  yaw: 0.65,
   pitch: 0.34,
-  dist: 5.4,
-  targetX: 0.1,
-  targetY: 0.45,
+  dist: 5.2,
+  targetX: 0.0,
+  targetY: 0.52,
   targetZ: 0.0,
-  goalYaw: -0.62,
+  goalYaw: 0.65,
   goalPitch: 0.34,
-  goalDist: 5.4,
-  goalTargetX: 0.1,
-  goalTargetY: 0.45,
+  goalDist: 5.2,
+  goalTargetX: 0.0,
+  goalTargetY: 0.52,
   goalTargetZ: 0.0,
   focusModule: "all",
   activeRun: "B",
@@ -1665,13 +1665,13 @@ const chassis3DState = {
 };
 
 const MODULE_CAMERA_TARGETS = {
-  all: { x: 0.05, y: 0.48, z: 0.0, dist: 5.3, yaw: -0.62, pitch: 0.34, label: "ALL MODULES (FULL STINGER GT)" },
-  engine: { x: 1.48, y: 0.54, z: 0.0, dist: 2.35, yaw: -0.55, pitch: 0.38, label: "1. 3.3L TWIN-TURBO V6 & FMIC" },
-  trans: { x: 0.58, y: 0.36, z: 0.0, dist: 2.1, yaw: -0.78, pitch: 0.32, label: "2. A8LR1 8AT & TORQUE CONVERTER" },
-  awd: { x: 0.04, y: 0.34, z: 0.08, dist: 1.75, yaw: -0.85, pitch: 0.36, label: "3. MAGNA ATC AWD TRANSFER CASE" },
-  driveline_f: { x: 0.92, y: 0.33, z: 0.15, dist: 2.45, yaw: -0.68, pitch: 0.42, label: "4. FRONT PROPSHAFT, DIFF & AXLES" },
-  driveline_r: { x: -0.88, y: 0.34, z: 0.0, dist: 2.55, yaw: -2.35, pitch: 0.35, label: "5. REAR PROPSHAFT, LSD & AXLES" },
-  tires: { x: -0.2, y: 0.34, z: 0.55, dist: 3.8, yaw: -0.95, pitch: 0.24, label: "6. TIRES, WHEELS & BREMBO BRAKES" },
+  all: { x: 0.0, y: 0.52, z: 0.0, dist: 5.2, yaw: 0.65, pitch: 0.34, label: "ALL MODULES (FULL STINGER GT)" },
+  engine: { x: 1.48, y: 0.50, z: 0.0, dist: 2.25, yaw: 0.62, pitch: 0.40, label: "1. 3.3L TWIN-TURBO V6 & FMIC" },
+  trans: { x: 0.58, y: 0.36, z: 0.0, dist: 2.05, yaw: 0.42, pitch: 0.30, label: "2. A8LR1 8AT & TORQUE CONVERTER" },
+  awd: { x: 0.04, y: 0.35, z: 0.06, dist: 1.75, yaw: 0.48, pitch: 0.34, label: "3. MAGNA ATC AWD TRANSFER CASE" },
+  driveline_f: { x: 0.95, y: 0.33, z: 0.12, dist: 2.35, yaw: 0.52, pitch: 0.44, label: "4. FRONT PROPSHAFT, DIFF & AXLES" },
+  driveline_r: { x: -0.85, y: 0.34, z: 0.0, dist: 2.40, yaw: -0.58, pitch: 0.34, label: "5. REAR PROPSHAFT, LSD & AXLES" },
+  tires: { x: 0.0, y: 0.36, z: 0.42, dist: 4.10, yaw: 0.38, pitch: 0.20, label: "6. TIRES, WHEELS & BREMBO BRAKES" },
 };
 
 function setupChassis3DStudio() {
@@ -1690,8 +1690,8 @@ function setupChassis3DStudio() {
     const dy = e.clientY - chassis3DState.lastMouseY;
     chassis3DState.lastMouseX = e.clientX;
     chassis3DState.lastMouseY = e.clientY;
-    chassis3DState.yaw += dx * 0.0085;
-    chassis3DState.pitch = Math.max(-0.45, Math.min(1.38, chassis3DState.pitch + dy * 0.0075));
+    chassis3DState.yaw -= dx * 0.0085;
+    chassis3DState.pitch = Math.max(-1.25, Math.min(1.50, chassis3DState.pitch + dy * 0.0075));
     chassis3DState.goalYaw = chassis3DState.yaw;
     chassis3DState.goalPitch = chassis3DState.pitch;
     renderChassis3DScene();
@@ -1714,22 +1714,35 @@ function setupChassis3DStudio() {
     });
   });
 
-  // Camera Angle Presets
+  // Camera Angle Presets (Orthonormal Turntable Angles)
   document.querySelectorAll(".cam-preset-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const mode = btn.dataset.cam;
+      const basePreset = MODULE_CAMERA_TARGETS[chassis3DState.focusModule] || MODULE_CAMERA_TARGETS.all;
+      chassis3DState.goalTargetX = basePreset.x;
+      chassis3DState.goalTargetY = basePreset.y;
+      chassis3DState.goalTargetZ = basePreset.z;
+
       if (mode === "iso") {
-        chassis3DState.goalYaw = -0.62;
+        // 3/4 Front-Right Isometric View
+        chassis3DState.goalYaw = 0.65;
         chassis3DState.goalPitch = 0.34;
+        chassis3DState.goalDist = basePreset.dist;
       } else if (mode === "side") {
-        chassis3DState.goalYaw = -Math.PI / 2;
-        chassis3DState.goalPitch = 0.08;
-      } else if (mode === "top") {
+        // Pure Side Squat Profile (+X Nose on Right, -X Tail on Left, +Y Roof on Top)
         chassis3DState.goalYaw = 0.0;
-        chassis3DState.goalPitch = 1.32;
+        chassis3DState.goalPitch = 0.05;
+        chassis3DState.goalDist = chassis3DState.focusModule === "all" ? 5.0 : basePreset.dist;
+      } else if (mode === "top") {
+        // Overhead Top X-Ray Plan View (+X Nose on Right, -X Tail on Left)
+        chassis3DState.goalYaw = 0.0;
+        chassis3DState.goalPitch = 1.48;
+        chassis3DState.goalDist = chassis3DState.focusModule === "all" ? 5.4 : basePreset.dist * 1.15;
       } else if (mode === "under") {
-        chassis3DState.goalYaw = -0.58;
-        chassis3DState.goalPitch = -0.32;
+        // Underbody AWD & Exhaust View (Camera below ground looking up at drivetrain)
+        chassis3DState.goalYaw = 0.45;
+        chassis3DState.goalPitch = -0.58;
+        chassis3DState.goalDist = chassis3DState.focusModule === "all" ? 4.8 : basePreset.dist;
       }
       startChassisSmoothLoop();
     });
@@ -2005,6 +2018,12 @@ function tempToNormalizedPct(tempC, minC, maxC) {
 function renderChassis3DScene() {
   const canvas = document.getElementById("canvasChassis3D");
   if (!canvas) return;
+  if (canvas.clientWidth > 100 && canvas.clientHeight > 100) {
+    if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
+      canvas.width = canvas.clientWidth;
+      canvas.height = canvas.clientHeight;
+    }
+  }
   const ctx = canvas.getContext("2d");
   const w = canvas.width;
   const h = canvas.height;
@@ -2067,14 +2086,41 @@ function renderChassis3DScene() {
   // Update the 6 Sub-Module Inspector Cards on the right
   renderSubmoduleInspectorCards(sample);
 
-  // Camera Basis Vectors
+  // Orthonormal Right-Handed Turntable LookAt Camera Basis:
+  // World Axes: +X = Front Nose, +Y = Vertical Roof Up, +Z = Right/Passenger Side
+  // Spherical Camera Eye around Target (targetX, targetY, targetZ):
+  //   yaw = 0, pitch = 0 -> Eye on +Z side looking toward -Z (+X Front on Right, +Y Up on Top)
+  //   pitch > 0          -> Eye above Target looking down at roof/hood
+  //   pitch < 0          -> Eye below Target looking up at underbody
   const cosY = Math.cos(chassis3DState.yaw);
   const sinY = Math.sin(chassis3DState.yaw);
   const cosP = Math.cos(chassis3DState.pitch);
   const sinP = Math.sin(chassis3DState.pitch);
-  const fov = Math.min(w, h) * 1.05;
+  const dist = chassis3DState.dist;
 
-  // Dynamic suspension squat pitch under longitudinal acceleration (nose rises, rear squats under +G)
+  // Camera Eye Position in World Space
+  const eyeX = chassis3DState.targetX + dist * cosP * sinY;
+  const eyeY = chassis3DState.targetY + dist * sinP;
+  const eyeZ = chassis3DState.targetZ + dist * cosP * cosY;
+
+  // Camera Forward Unit Vector F = normalize(Target - Eye)
+  const fx = -cosP * sinY;
+  const fy = -sinP;
+  const fz = -cosP * cosY;
+
+  // Camera Right Unit Vector R (Horizontal Right on Screen)
+  const rxCam = cosY;
+  const ryCam = 0.0;
+  const rzCam = -sinY;
+
+  // Camera True Up Unit Vector U = R x F (Vertical Up on Screen; U_y = cosP > 0 always!)
+  const uxCam = -sinP * sinY;
+  const uyCam = cosP;
+  const uzCam = -sinP * cosY;
+
+  const fov = Math.min(w, h) * 1.12;
+
+  // Dynamic suspension squat pitch under longitudinal acceleration (nose rises +Y, rear squats -Y under +G)
   const squatPitchRad = (sample.accel_g || 0) * 0.026;
   const cosSq = Math.cos(squatPitchRad);
   const sinSq = Math.sin(squatPitchRad);
@@ -2084,28 +2130,28 @@ function renderChassis3DScene() {
     let wy = y;
     let wz = z;
     if (applySquat && y > 0.16) {
-      const rx = wx * cosSq - (wy - 0.33) * sinSq;
-      const ry = (wy - 0.33) * cosSq + wx * sinSq + 0.33;
-      wx = rx;
-      wy = ry;
+      const rotX = wx * cosSq - (wy - 0.334) * sinSq;
+      const rotY = (wy - 0.334) * cosSq + wx * sinSq + 0.334;
+      wx = rotX;
+      wy = rotY;
     }
-    const dx = wx - chassis3DState.targetX;
-    const dy = wy - chassis3DState.targetY;
-    const dz = wz - chassis3DState.targetZ;
 
-    // Rotate around Y (Yaw)
-    const x1 = dx * cosY - dz * sinY;
-    const z1 = dx * sinY + dz * cosY;
-    // Rotate around X (Pitch)
-    const y2 = dy * cosP - z1 * sinP;
-    const z2 = dy * sinP + z1 * cosP + chassis3DState.dist;
+    // Vector from Camera Eye to World Point
+    const vx = wx - eyeX;
+    const vy = wy - eyeY;
+    const vz = wz - eyeZ;
 
-    if (z2 < 0.25) return null;
-    const scale = fov / z2;
+    // Project onto Orthonormal Camera Basis (R, U, F)
+    const xCam = vx * rxCam + vy * ryCam + vz * rzCam;
+    const yCam = vx * uxCam + vy * uyCam + vz * uzCam;
+    const zCam = vx * fx + vy * fy + vz * fz;
+
+    if (zCam < 0.25) return null;
+    const scale = fov / zCam;
     return {
-      sx: w * 0.5 + x1 * scale,
-      sy: h * 0.52 - y2 * scale,
-      depth: z2,
+      sx: w * 0.5 + xCam * scale,
+      sy: h * 0.52 - yCam * scale,
+      depth: zCam,
       scale,
     };
   };
@@ -2332,6 +2378,28 @@ function renderChassis3DScene() {
     ctx.font = "9px Consolas, monospace";
     ctx.fillText(c.sub, lx + 5, ly - 1);
   });
+
+  // Render 3D Orientation Triad Gizmo in Bottom-Right Corner (+X FRONT, +Y UP, +Z RIGHT)
+  const gx = w - 64;
+  const gy = h - 48;
+  const axisLen = 28;
+  const drawAxisVec = (ax, ay, az, color, label) => {
+    const sx = gx + (ax * rxCam + ay * ryCam + az * rzCam) * axisLen;
+    const sy = gy - (ax * uxCam + ay * uyCam + az * uzCam) * axisLen;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(gx, gy);
+    ctx.lineTo(sx, sy);
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.font = "bold 9px Consolas, monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(label, sx + (sx >= gx ? 8 : -8), sy + (sy >= gy ? 8 : -4));
+  };
+  drawAxisVec(1, 0, 0, "#00e5ff", "+X FRONT");
+  drawAxisVec(0, 1, 0, "#00e676", "+Y UP");
+  drawAxisVec(0, 0, 1, "#ffab00", "+Z RIGHT");
 }
 
 // Construct the 3D Kia Stinger GT Fastback Chassis Shell + 6 Internal Powertrain Sub-Modules
