@@ -2264,19 +2264,35 @@ function tempToNormalizedPct(tempC, minC, maxC) {
   return Math.max(0, Math.min(100, (((tempC || minC) - minC) / Math.max(1, maxC - minC)) * 100.0));
 }
 
-function renderChassis3DScene() {
-  const canvas = document.getElementById("canvasChassis3D");
-  if (!canvas) return;
-  if (canvas.clientWidth > 100 && canvas.clientHeight > 100) {
-    if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
-      canvas.width = canvas.clientWidth;
-      canvas.height = canvas.clientHeight;
+function renderChassis3DScene(customCtx = null, customW = 0, customH = 0, isGifRender = false) {
+  let ctx = customCtx;
+  let w = customW;
+  let h = customH;
+
+  if (!ctx) {
+    const canvas = document.getElementById("canvasChassis3D");
+    if (!canvas) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (canvas.clientWidth > 100 && canvas.clientHeight > 100) {
+      const targetW = Math.round(canvas.clientWidth * dpr);
+      const targetH = Math.round(canvas.clientHeight * dpr);
+      if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
+      }
     }
+    ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    w = canvas.clientWidth || canvas.width / dpr;
+    h = canvas.clientHeight || canvas.height / dpr;
+    ctx.clearRect(0, 0, w, h);
+  } else {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = "#070a10";
+    ctx.fillRect(0, 0, w, h);
   }
-  const ctx = canvas.getContext("2d");
-  const w = canvas.width;
-  const h = canvas.height;
-  ctx.clearRect(0, 0, w, h);
+
+  const uiScale = isGifRender ? Math.max(1.0, w / 920.0) : 1.0;
 
   const tel = getActiveChassisTelemetry();
   const sample = tel[chassis3DState.frameIdx] || tel[0] || {
@@ -2314,26 +2330,28 @@ function renderChassis3DScene() {
     stress_tire_f_pct: 28,
   };
 
-  // Update timeline readout labels
-  const lblSec = document.getElementById("lblTimelineSec");
-  if (lblSec) {
-    const phaseTag =
-      sample.t < 0
-        ? "PRE-STAGE BRAKE STALL"
-        : sample.shift
-        ? `UPSHIFT INERTIA PHASE (GEAR ${sample.gear})`
-        : sample.t < 0.35
-        ? "LAUNCH BREAKAWAY"
-        : `WOT PULL (GEAR ${sample.gear})`;
-    lblSec.textContent = `t = ${sample.t >= 0 ? "+" : ""}${sample.t.toFixed(2)} s [${phaseTag}]`;
-  }
-  const lblState = document.getElementById("lblTimelineState");
-  if (lblState) {
-    lblState.textContent = `${sample.v_mph.toFixed(1)} mph (${sample.v_kmh.toFixed(1)} km/h) • ${Math.round(sample.rpm)} RPM • ${sample.accel_g.toFixed(2)} G • Boost: ${sample.boost_psi.toFixed(1)} psi • EMAP: ${(sample.emap_psi || 0).toFixed(1)} psi`;
-  }
+  if (!isGifRender) {
+    // Update timeline readout labels
+    const lblSec = document.getElementById("lblTimelineSec");
+    if (lblSec) {
+      const phaseTag =
+        sample.t < 0
+          ? "PRE-STAGE BRAKE STALL"
+          : sample.shift
+          ? `UPSHIFT INERTIA PHASE (GEAR ${sample.gear})`
+          : sample.t < 0.35
+          ? "LAUNCH BREAKAWAY"
+          : `WOT PULL (GEAR ${sample.gear})`;
+      lblSec.textContent = `t = ${sample.t >= 0 ? "+" : ""}${sample.t.toFixed(2)} s [${phaseTag}]`;
+    }
+    const lblState = document.getElementById("lblTimelineState");
+    if (lblState) {
+      lblState.textContent = `${sample.v_mph.toFixed(1)} mph (${sample.v_kmh.toFixed(1)} km/h) • ${Math.round(sample.rpm)} RPM • ${sample.accel_g.toFixed(2)} G • Boost: ${sample.boost_psi.toFixed(1)} psi • EMAP: ${(sample.emap_psi || 0).toFixed(1)} psi`;
+    }
 
-  // Update the 6 Sub-Module Inspector Cards on the right
-  renderSubmoduleInspectorCards(sample);
+    // Update the 6 Sub-Module Inspector Cards on the right
+    renderSubmoduleInspectorCards(sample);
+  }
 
   // Strictly Orthonormal Right-Handed Camera Basis [R, U, F] relative to Target:
   //   R = Screen Right unit vector (-X Rear is Right, +X Front is Left in Side/Top views)
@@ -2393,8 +2411,8 @@ function renderChassis3DScene() {
   };
 
   // 1. Draw Ground Reference Grid (Track Surface)
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = "rgba(30, 41, 59, 0.55)";
+  ctx.lineWidth = 1.0 * uiScale;
+  ctx.strokeStyle = isGifRender ? "#162032" : "rgba(30, 41, 59, 0.55)";
   for (let gx = -3.0; gx <= 3.0; gx += 0.5) {
     const p1 = projectPoint(gx, 0.0, -1.35, false);
     const p2 = projectPoint(gx, 0.0, 1.35, false);
@@ -2466,21 +2484,22 @@ function renderChassis3DScene() {
     const p2 = projectPoint(seg.x2, seg.y2, seg.z2, seg.squat !== false);
     if (!p1 || !p2) continue;
 
-    let alpha = seg.alpha ?? 0.85;
-    let width = seg.width ?? 1.5;
+    let alpha = seg.alpha ?? (isGifRender ? 0.96 : 0.85);
+    let width = (seg.width ?? 1.5) * uiScale;
     if (focus !== "all") {
       if (seg.module === focus) {
         alpha = Math.min(1.0, alpha * 1.25);
         width *= 1.35;
       } else if (seg.module === "chassis") {
-        alpha = 0.09;
-        width = 0.8;
+        alpha = isGifRender ? 0.18 : 0.09;
+        width = 0.85 * uiScale;
       } else {
-        alpha = 0.14;
-        width = 0.9;
+        alpha = isGifRender ? 0.26 : 0.14;
+        width = 0.95 * uiScale;
       }
     }
 
+    const isGlow = seg.glow && (focus === "all" || seg.module === focus);
     projectedSegs.push({
       sx1: p1.sx,
       sy1: p1.sy,
@@ -2488,28 +2507,49 @@ function renderChassis3DScene() {
       sy2: p2.sy,
       depth: (p1.depth + p2.depth) * 0.5,
       color: seg.color || stressIndexToColor(seg.heat || 0, alpha),
+      haloColor: isGlow ? stressIndexToColor(seg.heat || 0, 0.28) : null,
       width,
-      glow: seg.glow && (focus === "all" || seg.module === focus),
+      glow: isGlow,
     });
   }
 
   projectedSegs.sort((a, b) => b.depth - a.depth);
 
   // Render sorted 3D wireframe segments
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
   for (let i = 0; i < projectedSegs.length; i++) {
     const s = projectedSegs[i];
-    ctx.beginPath();
-    ctx.moveTo(s.sx1, s.sy1);
-    ctx.lineTo(s.sx2, s.sy2);
-    ctx.strokeStyle = s.color;
-    ctx.lineWidth = s.width;
-    if (s.glow) {
-      ctx.shadowColor = s.color;
-      ctx.shadowBlur = 7;
+    if (isGifRender) {
+      // In GIF mode, use a clean 2-pass vector stroke instead of Gaussian shadowBlur so lines stay razor-sharp & palette-exact
+      if (s.glow && s.haloColor) {
+        ctx.beginPath();
+        ctx.moveTo(s.sx1, s.sy1);
+        ctx.lineTo(s.sx2, s.sy2);
+        ctx.strokeStyle = s.haloColor;
+        ctx.lineWidth = s.width * 2.15;
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.moveTo(s.sx1, s.sy1);
+      ctx.lineTo(s.sx2, s.sy2);
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = s.width;
+      ctx.stroke();
     } else {
-      ctx.shadowBlur = 0;
+      ctx.beginPath();
+      ctx.moveTo(s.sx1, s.sy1);
+      ctx.lineTo(s.sx2, s.sy2);
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = s.width;
+      if (s.glow) {
+        ctx.shadowColor = s.color;
+        ctx.shadowBlur = 7;
+      } else {
+        ctx.shadowBlur = 0;
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
   }
   ctx.shadowBlur = 0;
 
@@ -2571,67 +2611,72 @@ function renderChassis3DScene() {
     },
   ];
 
+  const titlePx = Math.round(9.5 * uiScale * 10) / 10;
+  const subPx = Math.round(9.0 * uiScale * 10) / 10;
+  const padX = Math.round(6 * uiScale);
+  const boxH = Math.round(27 * uiScale);
+
   callouts.forEach((c) => {
     if (focus !== "all" && focus !== c.mod) return;
     const pt = projectPoint(c.x, c.y, c.z, true);
     if (!pt) return;
-    const col = stressIndexToColor(c.heat, 0.95);
+    const col = stressIndexToColor(c.heat, 1.0);
 
     // Pin dot
     ctx.fillStyle = col;
     ctx.beginPath();
-    ctx.arc(pt.sx, pt.sy, 3.5, 0, Math.PI * 2);
+    ctx.arc(pt.sx, pt.sy, 3.5 * uiScale, 0, Math.PI * 2);
     ctx.fill();
 
     // Leader line & callout pill
-    const lx = pt.sx + 10;
-    const ly = pt.sy - 14;
+    const lx = Math.round(pt.sx + 11 * uiScale);
+    const ly = Math.round(pt.sy - 15 * uiScale);
     ctx.strokeStyle = col;
-    ctx.lineWidth = 1.2;
+    ctx.lineWidth = 1.3 * uiScale;
     ctx.beginPath();
     ctx.moveTo(pt.sx, pt.sy);
     ctx.lineTo(lx, ly);
     ctx.stroke();
 
-    ctx.font = "bold 9.5px Consolas, monospace";
+    ctx.font = `bold ${titlePx}px Consolas, monospace`;
     const w1 = ctx.measureText(c.title).width;
-    ctx.font = "9px Consolas, monospace";
+    ctx.font = `${subPx}px Consolas, monospace`;
     const w2 = ctx.measureText(c.sub).width;
-    const boxW = Math.max(w1, w2) + 10;
-    const boxH = 26;
+    const boxW = Math.round(Math.max(w1, w2) + padX * 2);
+    const boxY = Math.round(ly - boxH + 4 * uiScale);
 
-    ctx.fillStyle = "rgba(6, 10, 18, 0.86)";
-    ctx.fillRect(lx, ly - boxH + 4, boxW, boxH);
+    ctx.fillStyle = isGifRender ? "#080c14" : "rgba(6, 10, 18, 0.88)";
+    ctx.fillRect(lx, boxY, boxW, boxH);
     ctx.strokeStyle = col;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(lx, ly - boxH + 4, boxW, boxH);
+    ctx.lineWidth = Math.max(1, Math.round(1.1 * uiScale));
+    ctx.strokeRect(lx, boxY, boxW, boxH);
 
     ctx.fillStyle = col;
-    ctx.font = "bold 9.5px Consolas, monospace";
+    ctx.font = `bold ${titlePx}px Consolas, monospace`;
     ctx.textAlign = "left";
-    ctx.fillText(c.title, lx + 5, ly - 11);
-    ctx.fillStyle = "#e2e8f0";
-    ctx.font = "9px Consolas, monospace";
-    ctx.fillText(c.sub, lx + 5, ly - 1);
+    ctx.fillText(c.title, lx + padX, boxY + Math.round(11.5 * uiScale));
+    ctx.fillStyle = "#f1f5f9";
+    ctx.font = `${subPx}px Consolas, monospace`;
+    ctx.fillText(c.sub, lx + padX, boxY + Math.round(22.5 * uiScale));
   });
 
   // Render 3D Orientation Triad Gizmo in Bottom-Right Corner (+X FRONT, +Y UP, +Z RH)
-  const gx = w - 68;
-  const gy = h - 48;
-  const axisLen = 28;
+  const gx = w - Math.round(72 * uiScale);
+  const gy = h - Math.round((isGifRender ? 58 : 48) * uiScale);
+  const axisLen = 28 * uiScale;
   const drawAxisVec = (ax, ay, az, color, label) => {
     const sx = gx + (ax * rxCam + ay * ryCam + az * rzCam) * axisLen;
     const sy = gy - (ax * uxCam + ay * uyCam + az * uzCam) * axisLen;
     ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2.0 * uiScale;
     ctx.beginPath();
     ctx.moveTo(gx, gy);
     ctx.lineTo(sx, sy);
     ctx.stroke();
     ctx.fillStyle = color;
-    ctx.font = "bold 9px Consolas, monospace";
+    ctx.font = `bold ${Math.round(9 * uiScale)}px Consolas, monospace`;
     ctx.textAlign = "center";
-    ctx.fillText(label, sx + (sx >= gx ? 8 : -8), sy + (sy >= gy ? 8 : -4));
+    ctx.fillText(label, sx + (sx >= gx ? 9 * uiScale : -9 * uiScale), sy + (sy >= gy ? 9 * uiScale : -4 * uiScale));
   };
   drawAxisVec(1, 0, 0, "#00e5ff", "+X FRONT");
   drawAxisVec(0, 1, 0, "#00e676", "+Y UP");
@@ -3006,29 +3051,61 @@ function renderSubmoduleInspectorCards(s) {
 let gifRecordingActive = false;
 let gifRecordingAbort = false;
 
-// Build a tailored 256-color palette covering dark slate UI, white/cyan text,
-// and the full 0..100% Cyan -> Emerald -> Amber -> Red thermal/stress gradient
-// (both full-intensity and alpha-blended over the dark viewport), plus a 32K RGB555 LUT.
+// Build a high-precision 256-color palette (indices 0..254 opaque, index 255 reserved for GIF89a delta transparency)
+// covering exact dark UI surfaces, dedicated white & cyan sub-pixel font anti-aliasing ramps, Stinger body wireframe ramps,
+// and 80+64+48 steps of the Cyan -> Emerald -> Amber -> Red thermal/stress gradient, plus a 262,144-entry 6-bit RGB666 LUT.
+let cachedChassisGifPaletteAndLUT = null;
+
 function buildChassisGifPaletteAndLUT() {
+  if (cachedChassisGifPaletteAndLUT) return cachedChassisGifPaletteAndLUT;
+
   const palette = new Uint8Array(256 * 3);
   let idx = 0;
   const addColor = (r, g, b) => {
-    if (idx >= 256) return;
+    if (idx >= 255) return; // Index 255 is strictly reserved for GIF89a inter-frame delta transparency
     palette[idx * 3] = Math.max(0, Math.min(255, Math.round(r)));
     palette[idx * 3 + 1] = Math.max(0, Math.min(255, Math.round(g)));
     palette[idx * 3 + 2] = Math.max(0, Math.min(255, Math.round(b)));
     idx++;
   };
 
-  // 0..19: Dark backgrounds, slate grid lines, and crisp grayscale/white HUD text
+  // 0..15 (16 entries): Exact dark viewport/HUD surfaces, grid lines, and slate grayscale stops
   const basePresets = [
-    [7, 10, 16],    [9, 13, 22],    [11, 16, 26],   [13, 19, 32],
-    [15, 23, 42],   [23, 34, 54],   [30, 41, 59],   [51, 65, 85],
-    [71, 85, 105],  [100, 116, 139],[148, 163, 184],[180, 196, 214],
-    [203, 213, 225],[226, 232, 240],[241, 245, 249],[255, 255, 255],
-    [0, 180, 216],  [56, 189, 248], [255, 82, 82],  [185, 246, 202],
+    [7, 10, 16],     // #070a10 Viewport background
+    [8, 12, 20],     // #080c14 HUD & Callout box background
+    [6, 10, 18],     // #060a12 Deep callout fill
+    [9, 13, 22],     // #090d16 Panel dark
+    [15, 23, 42],    // #0f172a Slate 900
+    [22, 32, 50],    // #162032 Ground grid line exact color
+    [30, 41, 59],    // #1e293b Progress bar track
+    [51, 65, 85],    // #334155 Slate 700
+    [71, 85, 105],   // #475569 Slate 600
+    [100, 116, 139], // #64748b Slate 500
+    [148, 163, 184], // #94a3b8 Slate 400 HUD subtext
+    [203, 213, 225], // #cbd5e1 Slate 300 HUD secondary
+    [226, 232, 240], // #e2e8f0 Slate 200
+    [241, 245, 249], // #f1f5f9 Callout subtext
+    [248, 250, 252], // #f8fafc Crisp HUD white
+    [255, 255, 255], // Pure white
   ];
   basePresets.forEach(([r, g, b]) => addColor(r, g, b));
+
+  // 16..31 (16 entries): Dedicated font anti-aliasing ramp from #080c14 (8,12,20) -> #f8fafc (248,250,252)
+  // Prevents any color fringing on crisp white HUD & callout typography
+  for (let i = 1; i <= 16; i++) {
+    const u = i / 17.0;
+    addColor(8 + (248 - 8) * u, 12 + (250 - 12) * u, 20 + (252 - 20) * u);
+  }
+
+  // 32..47 (16 entries): Dedicated Cyan (#00e5ff) & Stinger Sky-Blue Wireframe (#38bdf8) anti-aliasing ramp over #070a10
+  for (let i = 1; i <= 8; i++) {
+    const u = i / 8.0;
+    addColor(7 * (1 - u) + 0 * u, 10 * (1 - u) + 229 * u, 16 * (1 - u) + 255 * u);
+  }
+  for (let i = 1; i <= 8; i++) {
+    const u = (i / 8.0) * 0.65; // Covers chassisOpts (0.22) and chassisAccent (0.36) plus anti-aliased edges
+    addColor(7 * (1 - u) + 56 * u, 10 * (1 - u) + 189 * u, 16 * (1 - u) + 248 * u);
+  }
 
   // Helper matching stressIndexToColor RGB values
   const evalStressRGB = (pct) => {
@@ -3045,44 +3122,50 @@ function buildChassisGifPaletteAndLUT() {
     }
   };
 
-  // 20..83 (64 entries): Full-brightness stress/thermal spectrum (0..100%)
-  for (let i = 0; i < 64; i++) {
-    const [r, g, b] = evalStressRGB((i / 63.0) * 100.0);
+  // 48..127 (80 entries): Full-intensity (100%) stress/thermal spectrum (0..100%)
+  for (let i = 0; i < 80; i++) {
+    const [r, g, b] = evalStressRGB((i / 79.0) * 100.0);
     addColor(r, g, b);
   }
-  // 84..147 (64 entries): Mid-alpha (0.52) blended over #090d16 background for glow & anti-aliased edges
+  // 128..191 (64 entries): Mid-alpha (0.58) blended over #070a10 for smooth anti-aliased wireframe line edges
   for (let i = 0; i < 64; i++) {
     const [r, g, b] = evalStressRGB((i / 63.0) * 100.0);
-    addColor(r * 0.52 + 9 * 0.48, g * 0.52 + 13 * 0.48, b * 0.52 + 22 * 0.48);
+    addColor(r * 0.58 + 7 * 0.42, g * 0.58 + 10 * 0.42, b * 0.58 + 16 * 0.42);
   }
-  // 148..195 (48 entries): Dim-alpha (0.24) blended over #090d16 for ghosted non-focused sub-modules
+  // 192..239 (48 entries): Halo / Ghost alpha (0.28) blended over #070a10 for 2-pass glow halos & unfocused sub-modules
   for (let i = 0; i < 48; i++) {
     const [r, g, b] = evalStressRGB((i / 47.0) * 100.0);
-    addColor(r * 0.24 + 9 * 0.76, g * 0.24 + 13 * 0.76, b * 0.24 + 22 * 0.76);
-  }
-  // 196..255 (60 entries): General 4x4x3 RGB cube + extra UI accents to cover any remaining colors
-  for (let r = 0; r < 4; r++) {
-    for (let g = 0; g < 4; g++) {
-      for (let b = 0; b < 3; b++) {
-        addColor((r / 3) * 255, (g / 3) * 255, (b / 2) * 255);
-      }
-    }
-  }
-  while (idx < 256) {
-    addColor(12, 18, 28);
+    addColor(r * 0.28 + 7 * 0.72, g * 0.28 + 10 * 0.72, b * 0.28 + 16 * 0.72);
   }
 
-  // Build 15-bit RGB555 (32,768 entries) nearest-neighbor lookup table for O(1) pixel quantization
-  const lut = new Uint8Array(32768);
-  for (let r5 = 0; r5 < 32; r5++) {
-    const r = (r5 << 3) | (r5 >> 2);
-    for (let g5 = 0; g5 < 32; g5++) {
-      const g = (g5 << 3) | (g5 >> 2);
-      for (let b5 = 0; b5 < 32; b5++) {
-        const b = (b5 << 3) | (b5 >> 2);
+  // 240..254 (15 entries): Extra UI accents & blends (Red #ff5252, Amber #ffab00, Emerald #00e676 over #080c14)
+  const extraAccents = [
+    [255, 82, 82],   [170, 58, 62],   [95, 35, 42],
+    [255, 171, 0],   [172, 118, 8],   [96, 68, 14],
+    [0, 230, 118],   [4, 156, 84],    [6, 88, 52],
+    [185, 246, 202], [56, 189, 248],  [14, 116, 144],
+    [38, 52, 74],    [60, 76, 102],   [120, 138, 165],
+  ];
+  extraAccents.forEach(([r, g, b]) => addColor(r, g, b));
+  while (idx < 255) {
+    addColor(8, 12, 20);
+  }
+  // Slot 255: Transparent key placeholder
+  palette[255 * 3] = 0;
+  palette[255 * 3 + 1] = 0;
+  palette[255 * 3 + 2] = 0;
+
+  // Build 18-bit RGB666 (64x64x64 = 262,144 entries) nearest-neighbor lookup table for O(1) high-precision quantization
+  const lut = new Uint8Array(262144);
+  for (let r6 = 0; r6 < 64; r6++) {
+    const r = (r6 << 2) | (r6 >> 4);
+    for (let g6 = 0; g6 < 64; g6++) {
+      const g = (g6 << 2) | (g6 >> 4);
+      for (let b6 = 0; b6 < 64; b6++) {
+        const b = (b6 << 2) | (b6 >> 4);
         let bestIdx = 0;
         let bestDist = 1e9;
-        for (let p = 0; p < 256; p++) {
+        for (let p = 0; p < 255; p++) {
           const dr = r - palette[p * 3];
           const dg = g - palette[p * 3 + 1];
           const db = b - palette[p * 3 + 2];
@@ -3093,21 +3176,24 @@ function buildChassisGifPaletteAndLUT() {
             if (d === 0) break;
           }
         }
-        lut[(r5 << 10) | (g5 << 5) | b5] = bestIdx;
+        lut[(r6 << 12) | (g6 << 6) | b6] = bestIdx;
       }
     }
   }
 
-  return { palette, lut };
+  cachedChassisGifPaletteAndLUT = { palette, lut };
+  return cachedChassisGifPaletteAndLUT;
 }
 
-// Fast GIF89a + 8-bit LZW stream encoder
+// High-Efficiency GIF89a + 8-bit LZW Encoder with Inter-Frame Delta Transparency (Index 255) & Sub-Rectangle Cropping
 class Gif89aEncoder {
   constructor(width, height, palette) {
     this.width = width;
     this.height = height;
     this.bytes = [];
     this.trie = new Int32Array(4096 * 256);
+    this.prevFrame = null;
+    this.subPixels = new Uint8Array(width * height);
 
     // 1. GIF89a Header ("GIF89a")
     this.writeASCII("GIF89a");
@@ -3139,17 +3225,77 @@ class Gif89aEncoder {
   }
 
   addFrame(indexedPixels, delayCs) {
-    // 1. Graphic Control Extension (8 bytes)
-    this.bytes.push(0x21, 0xf9, 0x04, 0x04);
-    this.writeU16(Math.max(2, Math.round(delayCs)));
-    this.bytes.push(0x00, 0x00);
+    const w = this.width;
+    const h = this.height;
+    let left = 0;
+    let top = 0;
+    let subW = w;
+    let subH = h;
+    let useTrans = false;
 
-    // 2. Image Descriptor (10 bytes)
+    if (!this.prevFrame) {
+      this.prevFrame = new Uint8Array(indexedPixels);
+      this.subPixels.set(indexedPixels);
+    } else {
+      // Find bounding box of changed pixels relative to previous frame
+      let minX = w, minY = h, maxX = -1, maxY = -1;
+      const prev = this.prevFrame;
+      for (let y = 0; y < h; y++) {
+        const rowOff = y * w;
+        for (let x = 0; x < w; x++) {
+          const p = rowOff + x;
+          if (indexedPixels[p] !== prev[p]) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+
+      if (maxX < minX) {
+        // Identical frame: emit a 1x1 transparent pixel
+        left = 0;
+        top = 0;
+        subW = 1;
+        subH = 1;
+        this.subPixels[0] = 255;
+        useTrans = true;
+      } else {
+        left = minX;
+        top = minY;
+        subW = maxX - minX + 1;
+        subH = maxY - minY + 1;
+        useTrans = true;
+        let dst = 0;
+        for (let y = minY; y <= maxY; y++) {
+          const rowOff = y * w;
+          for (let x = minX; x <= maxX; x++) {
+            const p = rowOff + x;
+            const cur = indexedPixels[p];
+            if (cur === prev[p]) {
+              this.subPixels[dst++] = 255; // Unchanged pixel -> Transparent index 255
+            } else {
+              this.subPixels[dst++] = cur;
+              prev[p] = cur;
+            }
+          }
+        }
+      }
+    }
+
+    // 1. Graphic Control Extension (8 bytes)
+    // Packed byte: Disposal Method = 1 (Do Not Dispose -> 0x04) | Transparent Flag (0x01 if useTrans)
+    this.bytes.push(0x21, 0xf9, 0x04, useTrans ? 0x05 : 0x04);
+    this.writeU16(Math.max(2, Math.round(delayCs)));
+    this.bytes.push(useTrans ? 255 : 0x00, 0x00);
+
+    // 2. Image Descriptor (10 bytes) for (left, top, subW, subH)
     this.bytes.push(0x2c);
-    this.writeU16(0);
-    this.writeU16(0);
-    this.writeU16(this.width);
-    this.writeU16(this.height);
+    this.writeU16(left);
+    this.writeU16(top);
+    this.writeU16(subW);
+    this.writeU16(subH);
     this.bytes.push(0x00);
 
     // 3. LZW Image Data (minCodeSize = 8)
@@ -3191,10 +3337,11 @@ class Gif89aEncoder {
 
     emitCode(clearCode, codeSize);
 
-    let prefix = indexedPixels[0];
-    const n = indexedPixels.length;
+    const n = subW * subH;
+    const pix = this.subPixels;
+    let prefix = pix[0];
     for (let i = 1; i < n; i++) {
-      const c = indexedPixels[i];
+      const c = pix[i];
       const key = (prefix << 8) | c;
       const next = trie[key];
       if (next !== -1) {
@@ -3232,39 +3379,40 @@ class Gif89aEncoder {
   }
 }
 
-// Render the self-contained HUD overlay onto the GIF capture canvas for a frame
-function drawGifFrameWithHUD(gifCtx, srcCanvas, gifW, gifH, sample, progress01, playSpeed) {
-  // 1. Dark background & scaled 3D viewport
-  gifCtx.fillStyle = "#070a10";
-  gifCtx.fillRect(0, 0, gifW, gifH);
-  gifCtx.drawImage(srcCanvas, 0, 0, gifW, gifH);
+// Render the self-contained HD HUD overlay directly onto the native 1280x580 GIF canvas
+function drawGifFrameWithHUD(gifCtx, gifW, gifH, sample, progress01, playSpeed) {
+  // 1. Render 3D scene natively at full 1280x580 HD vector resolution (zero bitmap scaling blur!)
+  renderChassis3DScene(gifCtx, gifW, gifH, true);
 
-  // 2. Top-Left Title & Mode Banner
-  gifCtx.fillStyle = "rgba(8, 12, 20, 0.82)";
-  gifCtx.fillRect(8, 8, 330, 38);
-  gifCtx.strokeStyle = "rgba(0, 229, 255, 0.35)";
-  gifCtx.lineWidth = 1;
-  gifCtx.strokeRect(8, 8, 330, 38);
+  // 2. Top-Left Title & Mode Banner (Crisp opaque #080c14 box for clean LZW delta compression)
+  const leftW = 476;
+  const topH = 50;
+  gifCtx.fillStyle = "#080c14";
+  gifCtx.fillRect(12, 10, leftW, topH);
+  gifCtx.strokeStyle = "#00e5ff";
+  gifCtx.lineWidth = 1.5;
+  gifCtx.strokeRect(12, 10, leftW, topH);
 
   const runTag = chassis3DState.activeRun === "B" ? "RUN B (COMPARISON)" : "RUN A (BASELINE)";
   const shaderTag = chassis3DState.heatMode === "temp" ? "TEMPERATURES (°C)" : "STRESS HOT-SPOTS (%)";
   const modPreset = MODULE_CAMERA_TARGETS[chassis3DState.focusModule] || MODULE_CAMERA_TARGETS.all;
 
   gifCtx.fillStyle = "#00e5ff";
-  gifCtx.font = "bold 11px Consolas, monospace";
+  gifCtx.font = "bold 14px Consolas, monospace";
   gifCtx.textAlign = "left";
-  gifCtx.fillText(`STINGER GT 3.3T AWD • ${runTag} • ${playSpeed.toFixed(2)}x`, 14, 23);
-  gifCtx.fillStyle = "#94a3b8";
-  gifCtx.font = "10px Consolas, monospace";
-  gifCtx.fillText(`${shaderTag} • ${modPreset.label}`, 14, 38);
+  gifCtx.fillText(`STINGER GT 3.3T AWD • ${runTag} • ${playSpeed.toFixed(2)}x`, 22, 30);
+  gifCtx.fillStyle = "#cbd5e1";
+  gifCtx.font = "bold 12px Consolas, monospace";
+  gifCtx.fillText(`${shaderTag} • ${modPreset.label}`, 22, 49);
 
   // 3. Top-Right Live Telemetry Readout Box
-  const boxW = 395;
-  const boxX = gifW - boxW - 8;
-  gifCtx.fillStyle = "rgba(8, 12, 20, 0.84)";
-  gifCtx.fillRect(boxX, 8, boxW, 38);
-  gifCtx.strokeStyle = "rgba(148, 163, 184, 0.35)";
-  gifCtx.strokeRect(boxX, 8, boxW, 38);
+  const rightW = 556;
+  const rightX = gifW - rightW - 12;
+  gifCtx.fillStyle = "#080c14";
+  gifCtx.fillRect(rightX, 10, rightW, topH);
+  gifCtx.strokeStyle = "#475569";
+  gifCtx.lineWidth = 1.5;
+  gifCtx.strokeRect(rightX, 10, rightW, topH);
 
   const phaseTag =
     sample.t < 0
@@ -3276,41 +3424,47 @@ function drawGifFrameWithHUD(gifCtx, srcCanvas, gifW, gifH, sample, progress01, 
       : `WOT GEAR ${sample.gear}`;
 
   gifCtx.fillStyle = "#f8fafc";
-  gifCtx.font = "bold 11px Consolas, monospace";
+  gifCtx.font = "bold 14px Consolas, monospace";
   gifCtx.fillText(
     `t = ${sample.t >= 0 ? "+" : ""}${sample.t.toFixed(2)}s [${phaseTag}] | ${(sample.v_mph || 0).toFixed(1)} MPH | ${Math.round(sample.rpm || 0)} RPM`,
-    boxX + 8,
-    23
+    rightX + 12,
+    30
   );
-  gifCtx.fillStyle = "#cbd5e1";
-  gifCtx.font = "10px Consolas, monospace";
+  gifCtx.fillStyle = "#e2e8f0";
+  gifCtx.font = "bold 12px Consolas, monospace";
   gifCtx.fillText(
     `${(sample.accel_g || 0).toFixed(2)}G • ${(sample.eng_nm || 0).toFixed(0)}Nm • Boost ${(sample.boost_psi || 0).toFixed(1)}psi • EMAP ${(sample.emap_psi || 0).toFixed(1)}psi • AWD ${(sample.awd_actual_nm || 0).toFixed(0)}Nm`,
-    boxX + 8,
-    38
+    rightX + 12,
+    49
   );
 
   // 4. Bottom Component Stress/Temp Strip + Run Timeline Progress Bar
-  const botH = 26;
+  const botH = 34;
   const botY = gifH - botH;
-  gifCtx.fillStyle = "rgba(8, 12, 20, 0.88)";
+  gifCtx.fillStyle = "#080c14";
   gifCtx.fillRect(0, botY, gifW, botH);
+  gifCtx.strokeStyle = "#1e293b";
+  gifCtx.lineWidth = 1;
+  gifCtx.beginPath();
+  gifCtx.moveTo(0, botY);
+  gifCtx.lineTo(gifW, botY);
+  gifCtx.stroke();
 
-  gifCtx.font = "bold 10px Consolas, monospace";
-  gifCtx.fillStyle = "#e2e8f0";
+  gifCtx.font = "bold 13px Consolas, monospace";
+  gifCtx.fillStyle = "#f1f5f9";
   const summaryLine =
-    `[1] V6: ${(sample.temp_egt_c || 0).toFixed(0)}°C (${(sample.stress_engine_pct || 0).toFixed(0)}%)  ` +
-    `[2] 8AT: ${(sample.temp_trans_c || 0).toFixed(1)}°C (${(sample.stress_trans_pct || 0).toFixed(0)}%)  ` +
-    `[5] AWD: ${(sample.temp_awd_c || 0).toFixed(1)}°C (${(sample.stress_awd_pct || 0).toFixed(0)}%)  ` +
-    `[3,4] Rear LSD: ${(sample.temp_rear_diff_c || 0).toFixed(1)}°C  ` +
+    `[1] V6: ${(sample.temp_egt_c || 0).toFixed(0)}°C (${(sample.stress_engine_pct || 0).toFixed(0)}%)   ` +
+    `[2] 8AT: ${(sample.temp_trans_c || 0).toFixed(1)}°C (${(sample.stress_trans_pct || 0).toFixed(0)}%)   ` +
+    `[5] AWD: ${(sample.temp_awd_c || 0).toFixed(1)}°C (${(sample.stress_awd_pct || 0).toFixed(0)}%)   ` +
+    `[3,4] Rear LSD: ${(sample.temp_rear_diff_c || 0).toFixed(1)}°C   ` +
     `Tires R/F: ${(sample.temp_tire_r_c || 0).toFixed(1)}°/${(sample.temp_tire_f_c || 0).toFixed(1)}°C`;
-  gifCtx.fillText(summaryLine, 10, botY + 15);
+  gifCtx.fillText(summaryLine, 14, botY + 20);
 
   // Timeline progress bar along bottom edge (0% at run start -> 100% at run finish)
   gifCtx.fillStyle = "#1e293b";
-  gifCtx.fillRect(0, gifH - 4, gifW, 4);
+  gifCtx.fillRect(0, gifH - 5, gifW, 5);
   gifCtx.fillStyle = "#00e5ff";
-  gifCtx.fillRect(0, gifH - 4, Math.round(gifW * Math.max(0, Math.min(1, progress01))), 4);
+  gifCtx.fillRect(0, gifH - 5, Math.round(gifW * Math.max(0, Math.min(1, progress01))), 5);
 }
 
 async function recordChassisRunToGif() {
@@ -3342,30 +3496,26 @@ async function recordChassisRunToGif() {
   // Lock camera goal to current camera so view remains anchored at user's chosen 3D angle
   syncGoalToCurrentCamera();
 
-  // Determine exact frame cadence from #selPlaySpeed:
-  // Telemetry samples are spaced at dtSample = 0.02s (50 Hz).
-  //   2.00x Fast      -> sampleStride = 4 (dtSim = 0.08s), delayCs = 4 (40ms) -> 0.08 / 0.04 = 2.00x
-  //   1.00x Real-Time -> sampleStride = 2 (dtSim = 0.04s), delayCs = 4 (40ms) -> 0.04 / 0.04 = 1.00x
-  //   0.50x Analysis  -> sampleStride = 1 (dtSim = 0.02s), delayCs = 4 (40ms) -> 0.02 / 0.04 = 0.50x
-  //   0.25x Slow-Mo   -> sampleStride = 1 (dtSim = 0.02s), delayCs = 8 (80ms) -> 0.02 / 0.08 = 0.25x
+  // Target 12.5 FPS (delayCs = 8 -> 80ms/frame, right in the 10-15 FPS sweet spot)
+  // Telemetry samples are spaced at dtSample = 0.02s (50 Hz):
+  //   2.00x Fast      -> sampleStride = 8 (dtSim = 0.16s), delayCs = 8 (80ms) -> 0.16 / 0.08 = 2.00x @ 12.5 FPS
+  //   1.00x Real-Time -> sampleStride = 4 (dtSim = 0.08s), delayCs = 8 (80ms) -> 0.08 / 0.08 = 1.00x @ 12.5 FPS
+  //   0.50x Analysis  -> sampleStride = 2 (dtSim = 0.04s), delayCs = 8 (80ms) -> 0.04 / 0.08 = 0.50x @ 12.5 FPS
+  //   0.25x Slow-Mo   -> sampleStride = 1 (dtSim = 0.02s), delayCs = 8 (80ms) -> 0.02 / 0.08 = 0.25x @ 12.5 FPS
   const selSpeed = document.getElementById("selPlaySpeed");
   const playSpeed = parseFloat(selSpeed?.value) || chassis3DState.playSpeed || 0.5;
   chassis3DState.playSpeed = playSpeed;
 
-  let sampleStride = 1;
-  let delayCs = 4;
+  const delayCs = 8; // 80 ms per frame = 12.5 FPS
+  let sampleStride = 2;
   if (playSpeed >= 1.8) {
-    sampleStride = 4;
-    delayCs = 4;
+    sampleStride = 8;
   } else if (playSpeed >= 0.9) {
-    sampleStride = 2;
-    delayCs = 4;
+    sampleStride = 4;
   } else if (playSpeed >= 0.4) {
-    sampleStride = 1;
-    delayCs = 4;
+    sampleStride = 2;
   } else {
     sampleStride = 1;
-    delayCs = 8;
   }
 
   // Build exact frame index list locked to Beginning (idx = 0) and End (idx = tel.length - 1) of the run
@@ -3377,13 +3527,13 @@ async function recordChassisRunToGif() {
     frameIndices.push(tel.length - 1);
   }
 
-  // Offscreen composite canvas for GIF encoding (even dimensions for clean scaling)
-  const gifW = 800;
-  const gifH = 368;
+  // Native HD 1280x580 canvas for razor-sharp direct vector rendering (no drawImage rescaling blur)
+  const gifW = 1280;
+  const gifH = 580;
   const offCanvas = document.createElement("canvas");
   offCanvas.width = gifW;
   offCanvas.height = gifH;
-  const offCtx = offCanvas.getContext("2d", { willReadFrequently: true });
+  const offCtx = offCanvas.getContext("2d", { willReadFrequently: true, alpha: false });
 
   const { palette, lut } = buildChassisGifPaletteAndLUT();
   const encoder = new Gif89aEncoder(gifW, gifH, palette);
@@ -3413,33 +3563,32 @@ async function recordChassisRunToGif() {
       chassis3DState.wheelAngleRear = (chassis3DState.wheelAngleRear + (vrMs / 0.334) * dtSim * 0.6) % (Math.PI * 2);
       chassis3DState.airflowPhase = (chassis3DState.airflowPhase + dtSim * (0.8 + (sample.v_mph || 0) * 0.025)) % 1.0;
 
-      // Render 3D scene and synchronize UI timeline cursor
+      // Update live UI state & render native 1280x580 HD GIF frame
       chassis3DState.frameIdx = idx;
       if (rng) rng.value = String(idx);
       hoverTimeSec = sample.t;
-      updateCursorReadout(hoverTimeSec);
-      renderChassis3DScene();
 
-      // Composite 3D canvas + HUD banner onto offscreen GIF frame
       const progress01 = totalFrames > 1 ? f / (totalFrames - 1) : 1.0;
-      drawGifFrameWithHUD(offCtx, canvas, gifW, gifH, sample, progress01, playSpeed);
+      drawGifFrameWithHUD(offCtx, gifW, gifH, sample, progress01, playSpeed);
 
-      // Quantize RGBA pixels to 8-bit palette indices via O(1) RGB555 LUT
+      // Quantize RGBA pixels to 8-bit palette indices via O(1) 18-bit RGB666 LUT
       const rgba = offCtx.getImageData(0, 0, gifW, gifH).data;
       const nPx = gifW * gifH;
       for (let p = 0, j = 0; p < nPx; p++, j += 4) {
-        const key555 = ((rgba[j] >> 3) << 10) | ((rgba[j + 1] >> 3) << 5) | (rgba[j + 2] >> 3);
-        indexedBuf[p] = lut[key555];
+        const key666 = ((rgba[j] >> 2) << 12) | ((rgba[j + 1] >> 2) << 6) | (rgba[j + 2] >> 2);
+        indexedBuf[p] = lut[key666];
       }
 
       // Hold the final frame of the run for 1.0s (100 cs) before looping
       const frameDelayCs = f === totalFrames - 1 ? 100 : delayCs;
       encoder.addFrame(indexedBuf, frameDelayCs);
 
-      // Yield every 5 frames so browser updates live 3D viewport and button progress
-      if (f % 5 === 0 || f === totalFrames - 1) {
+      // Yield every 4 frames so browser updates live 3D viewport and button progress smoothly
+      if (f % 4 === 0 || f === totalFrames - 1) {
         const pct = Math.round(((f + 1) / totalFrames) * 100);
         btn.innerHTML = `&#9632; REC ${pct}% (${f + 1}/${totalFrames})`;
+        updateCursorReadout(hoverTimeSec);
+        renderChassis3DScene();
         renderAllCharts();
         await new Promise((r) => setTimeout(r, 0));
       }
@@ -3466,4 +3615,5 @@ async function recordChassisRunToGif() {
     btn.innerHTML = "&#9679; RECORD GIF";
   }
 }
+
 
