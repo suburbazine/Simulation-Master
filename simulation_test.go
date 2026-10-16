@@ -98,3 +98,93 @@ func TestStorageTreeInitialization(t *testing.T) {
 	}
 }
 
+func TestFuelTypeCamSparkAndBoostModeling(t *testing.T) {
+	ecuBins, tcuBins, awdBins := DiscoverBinaries()
+	if len(ecuBins) < 3 || len(tcuBins) < 2 || len(awdBins) < 2 {
+		t.Skip("insufficient bins for fuel/cam/spark/boost test")
+	}
+
+	env := EnvironmentConfig{
+		SurfaceID:       "dry_asphalt_street",
+		VehicleMassKg:   1915,
+		AmbientTempC:    22,
+		CoolantTempC:    85,
+		FrontTireRadius: 0.334,
+		RearTireRadius:  0.334,
+		SimDurationSec:  13.5,
+	}
+
+	// Compare KimJongTuned BEF (+4.5 deg aggressive spark) on 91 AKI vs E85
+	baseCfg := RunConfig{
+		Label:           "KJT BEF 91 AKI",
+		ECUBinPath:      ecuBins[2].Path, // KIMJONGTUNED_BEF
+		TCUBinPath:      tcuBins[1].Path, // EKM Tuned
+		AWDBinPath:      awdBins[1].Path, // SportLaunch
+		DriveMode:       "sport",
+		ESCMode:         "sport",
+		FuelType:        "91_aki",
+		PreStageTimeSec: 1.4,
+		BrakeHoldPsi:    1200,
+		BrakeReleaseMs:  140,
+		PedalPct:        100,
+		Overrides:       OverrideConfig{TorqueScalePct: 100},
+	}
+
+	e85Cfg := baseCfg
+	e85Cfg.Label = "KJT BEF E85 + 2.5 psi Boost + 6 deg Cam Overlap"
+	e85Cfg.FuelType = "e85"
+	e85Cfg.Overrides.BoostAdderPsi = 2.5
+	e85Cfg.Overrides.CamOverlapAdderDeg = 6.0
+
+	resp, err := ExecuteSimulation(SimRequest{
+		Environment: env,
+		RunA:        baseCfg,
+		RunB:        &e85Cfg,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteSimulation failed: %v", err)
+	}
+	res91 := resp.RunA
+	resE85 := *resp.RunB
+
+	var maxKR91, maxKRE85, maxOverlap91, maxOverlapE85, maxBoost91, maxBoostE85 float64
+	for _, s := range res91.Telemetry {
+		if s.KnockRetardDeg > maxKR91 {
+			maxKR91 = s.KnockRetardDeg
+		}
+		if s.CamOverlapDeg > maxOverlap91 {
+			maxOverlap91 = s.CamOverlapDeg
+		}
+		if s.BoostPsi > maxBoost91 {
+			maxBoost91 = s.BoostPsi
+		}
+	}
+	for _, s := range resE85.Telemetry {
+		if s.KnockRetardDeg > maxKRE85 {
+			maxKRE85 = s.KnockRetardDeg
+		}
+		if s.CamOverlapDeg > maxOverlapE85 {
+			maxOverlapE85 = s.CamOverlapDeg
+		}
+		if s.BoostPsi > maxBoostE85 {
+			maxBoostE85 = s.BoostPsi
+		}
+	}
+
+	t.Logf("KJT BEF on 91 AKI: 0-60=%.2fs | 1/4mi=%.2fs @ %.1f mph | Peak=%.0f Nm / %.0f whp | MaxBoost=%.1f psi | MaxKR=%.1f deg | MaxOverlap=%.1f degCA",
+		res91.Summary.ZeroTo60MphSec, res91.Summary.QuarterMileSec, res91.Summary.QuarterMileMph, res91.Summary.PeakEngineTorqueNm, res91.Summary.PeakWheelPowerHp, maxBoost91, maxKR91, maxOverlap91)
+	t.Logf("KJT BEF on E85 (+2.5psi, +6deg Overlap): 0-60=%.2fs | 1/4mi=%.2fs @ %.1f mph | Peak=%.0f Nm / %.0f whp | MaxBoost=%.1f psi | MaxKR=%.1f deg | MaxOverlap=%.1f degCA",
+		resE85.Summary.ZeroTo60MphSec, resE85.Summary.QuarterMileSec, resE85.Summary.QuarterMileMph, resE85.Summary.PeakEngineTorqueNm, resE85.Summary.PeakWheelPowerHp, maxBoostE85, maxKRE85, maxOverlapE85)
+
+	if maxKR91 <= maxKRE85 {
+		t.Fatalf("Expected higher knock retard on 91 AKI (%.2f deg) than E85 (%.2f deg)", maxKR91, maxKRE85)
+	}
+	if maxOverlapE85 <= maxOverlap91 {
+		t.Fatalf("Expected higher cam overlap with +6 deg adder (%.2f vs %.2f)", maxOverlapE85, maxOverlap91)
+	}
+	if resE85.Summary.PeakWheelPowerHp <= res91.Summary.PeakWheelPowerHp {
+		t.Fatalf("Expected higher peak wheel HP on E85 + boost (%.1f vs %.1f)", resE85.Summary.PeakWheelPowerHp, res91.Summary.PeakWheelPowerHp)
+	}
+}
+
+

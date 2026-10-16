@@ -128,7 +128,18 @@
             <label>Magna ATC AWD ECU Binary <button type="button" class="btn-quick-import" data-target="awd" data-assign="runA_awdBin">+ Import .BIN</button></label>
             <select id="runA_awdBin"></select>
           </div>
-          <div class="form-grid-3">
+          <div class="form-grid-2">
+            <div class="form-row">
+              <label>Fuel / Octane Blend</label>
+              <select id="runA_fuelType">
+                <option value="93_aki">93 AKI / 98 RON Pump</option>
+                <option value="91_aki">91 AKI / 95 RON Pump</option>
+                <option value="93_wmi">93 AKI + WMI Meth</option>
+                <option value="e30">E30 Ethanol Blend</option>
+                <option value="e50">E50 Ethanol Blend</option>
+                <option value="e85">E85 Race / CPI</option>
+              </select>
+            </div>
             <div class="form-row">
               <label>Drive Mode</label>
               <select id="runA_driveMode">
@@ -138,6 +149,8 @@
                 <option value="custom_m4">Mode 4</option>
               </select>
             </div>
+          </div>
+          <div class="form-grid-2">
             <div class="form-row">
               <label>ESC / TCS</label>
               <select id="runA_escMode">
@@ -175,6 +188,18 @@
               <div class="form-row">
                 <label>ECU Torque / Boost Scale (%)</label>
                 <input type="number" id="runA_ovTorquePct" value="100" step="2" />
+              </div>
+              <div class="form-row">
+                <label>Boost Target Adder (psi)</label>
+                <input type="number" id="runA_ovBoostAdder" value="0" step="0.5" title="Direct manifold boost target adder (+psi on top of 0x21EC00 PUT_SP)" />
+              </div>
+              <div class="form-row">
+                <label>WOT Spark Adder (&deg;BTDC)</label>
+                <input type="number" id="runA_ovSparkAdder" value="0" step="0.5" title="Direct WOT ignition timing advance adder (+deg on top of 0x238090)" />
+              </div>
+              <div class="form-row">
+                <label>Dual-CVVT Overlap Bias (&deg;CA)</label>
+                <input type="number" id="runA_ovCamOverlap" value="0" step="1" title="Valve overlap bias (+deg increases low/mid scavenging spool; -deg favors high-RPM breathing)" />
               </div>
               <div class="form-row">
                 <label>0x207AD9 Shift Spark Floor (&deg;)</label>
@@ -245,7 +270,18 @@
             <label>Magna ATC AWD ECU Binary <button type="button" class="btn-quick-import" data-target="awd" data-assign="runB_awdBin">+ Import .BIN</button></label>
             <select id="runB_awdBin"></select>
           </div>
-          <div class="form-grid-3">
+          <div class="form-grid-2">
+            <div class="form-row">
+              <label>Fuel / Octane Blend</label>
+              <select id="runB_fuelType">
+                <option value="93_aki">93 AKI / 98 RON Pump</option>
+                <option value="91_aki">91 AKI / 95 RON Pump</option>
+                <option value="93_wmi">93 AKI + WMI Meth</option>
+                <option value="e30">E30 Ethanol Blend</option>
+                <option value="e50">E50 Ethanol Blend</option>
+                <option value="e85">E85 Race / CPI</option>
+              </select>
+            </div>
             <div class="form-row">
               <label>Drive Mode</label>
               <select id="runB_driveMode">
@@ -255,6 +291,8 @@
                 <option value="custom_m4">Mode 4</option>
               </select>
             </div>
+          </div>
+          <div class="form-grid-2">
             <div class="form-row">
               <label>ESC / TCS</label>
               <select id="runB_escMode">
@@ -292,6 +330,18 @@
               <div class="form-row">
                 <label>ECU Torque / Boost Scale (%)</label>
                 <input type="number" id="runB_ovTorquePct" value="114" step="2" />
+              </div>
+              <div class="form-row">
+                <label>Boost Target Adder (psi)</label>
+                <input type="number" id="runB_ovBoostAdder" value="0" step="0.5" title="Direct manifold boost target adder (+psi on top of 0x21EC00 PUT_SP)" />
+              </div>
+              <div class="form-row">
+                <label>WOT Spark Adder (&deg;BTDC)</label>
+                <input type="number" id="runB_ovSparkAdder" value="0" step="0.5" title="Direct WOT ignition timing advance adder (+deg on top of 0x238090)" />
+              </div>
+              <div class="form-row">
+                <label>Dual-CVVT Overlap Bias (&deg;CA)</label>
+                <input type="number" id="runB_ovCamOverlap" value="0" step="1" title="Valve overlap bias (+deg increases low/mid scavenging spool; -deg favors high-RPM breathing)" />
               </div>
               <div class="form-row">
                 <label>0x207AD9 Shift Spark Floor (&deg;)</label>
@@ -425,7 +475,7 @@
         </div>
       </section>
 
-      <!-- TAB 3: ECU TORQUE, BOOST & SHIFT SPARK CUT -->
+      <!-- TAB 3: ECU TORQUE, BOOST, SPARK, DUAL-CVVT CAM & KNOCK -->
       <section class="tab-content" id="tab-ecu-tcu">
         <div class="scope-stack">
           <div class="scope-card">
@@ -433,14 +483,21 @@
               <div class="scope-title">UNCAPPED TORQUE VS. ACTUAL TORQUE (NM) &amp; MANIFOLD BOOST PRESSURE (PSI)</div>
               <div class="chart-legend" id="legend_canvasEcu1"></div>
             </div>
-            <canvas id="canvasEcu1" class="scope-canvas" width="1100" height="265"></canvas>
+            <canvas id="canvasEcu1" class="scope-canvas" width="1100" height="195"></canvas>
           </div>
           <div class="scope-card">
             <div class="scope-header">
               <div class="scope-title">IGNITION TIMING ADVANCE (&deg;BTDC), SHIFT SPARK FLOOR (0x207AD9) &amp; SPARK EFFICIENCY (&eta;<sub>iga</sub>)</div>
               <div class="chart-legend" id="legend_canvasEcu2"></div>
             </div>
-            <canvas id="canvasEcu2" class="scope-canvas" width="1100" height="265"></canvas>
+            <canvas id="canvasEcu2" class="scope-canvas" width="1100" height="195"></canvas>
+          </div>
+          <div class="scope-card">
+            <div class="scope-header">
+              <div class="scope-title">DUAL-CVVT CAM VALVE OVERLAP (&deg;CA SCAVENGING) &amp; FUEL OCTANE KNOCK RETARD (&deg;KR)</div>
+              <div class="chart-legend" id="legend_canvasEcu3"></div>
+            </div>
+            <canvas id="canvasEcu3" class="scope-canvas" width="1100" height="195"></canvas>
           </div>
         </div>
       </section>

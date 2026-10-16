@@ -183,6 +183,13 @@ func NormalizeEnvironment(env EnvironmentConfig) EnvironmentConfig {
 
 // NormalizeRunConfig fills in default launch & pedal parameters if omitted.
 func NormalizeRunConfig(cfg RunConfig) RunConfig {
+	if cfg.FuelType == "" {
+		if strings.Contains(strings.ToLower(cfg.ECUBinPath), "bef") {
+			cfg.FuelType = "e30"
+		} else {
+			cfg.FuelType = "93_aki"
+		}
+	}
 	if cfg.DriveMode == "" {
 		cfg.DriveMode = "sport"
 	}
@@ -211,6 +218,78 @@ func NormalizeRunConfig(cfg RunConfig) RunConfig {
 		cfg.Overrides.FrontSplitScalePct = 100.0
 	}
 	return cfg
+}
+
+type fuelThermodynamics struct {
+	OctaneSparkOffsetDeg float64 // Knock threshold offset relative to 93 AKI pump gas (deg BTDC)
+	LatentChargeCoolC    float64 // Effective cylinder intake charge cooling from fuel vaporization (deg C)
+	CombustionEnergyMult float64 // Stoichiometric mass flow / flame speed torque factor at WOT
+	CommandedLambda      float64 // Target WOT equivalence ratio lambda
+}
+
+func evalFuelThermodynamics(fuelType string) fuelThermodynamics {
+	switch strings.ToLower(strings.TrimSpace(fuelType)) {
+	case "91_aki":
+		return fuelThermodynamics{OctaneSparkOffsetDeg: -2.6, LatentChargeCoolC: 0.0, CombustionEnergyMult: 0.992, CommandedLambda: 0.80}
+	case "93_wmi":
+		return fuelThermodynamics{OctaneSparkOffsetDeg: +3.8, LatentChargeCoolC: 8.5, CombustionEnergyMult: 1.022, CommandedLambda: 0.81}
+	case "e30":
+		return fuelThermodynamics{OctaneSparkOffsetDeg: +4.5, LatentChargeCoolC: 6.5, CombustionEnergyMult: 1.030, CommandedLambda: 0.83}
+	case "e50":
+		return fuelThermodynamics{OctaneSparkOffsetDeg: +5.8, LatentChargeCoolC: 9.5, CombustionEnergyMult: 1.044, CommandedLambda: 0.84}
+	case "e85":
+		return fuelThermodynamics{OctaneSparkOffsetDeg: +7.2, LatentChargeCoolC: 13.0, CombustionEnergyMult: 1.058, CommandedLambda: 0.85}
+	default: // "93_aki"
+		return fuelThermodynamics{OctaneSparkOffsetDeg: 0.0, LatentChargeCoolC: 0.0, CombustionEnergyMult: 1.000, CommandedLambda: 0.82}
+	}
+}
+
+// evalDualCVVT models the Lambda II G6DP Dual-CVVT intake advance (0..+30 deg CA) and exhaust retard (-20..0 deg CA).
+// Returns intakeCamDeg, exhaustCamDeg, overlapDeg, spoolTauMult, and veCamMult.
+func evalDualCVVT(rpm, airloadMg, overlapAdderDeg float64) (float64, float64, float64, float64, float64) {
+	loadFrac := math.Max(0.0, math.Min(1.0, (airloadMg-250.0)/900.0))
+
+	// Base intake advance schedule across RPM (scavenging peak between 1600-3500 RPM, retards at high RPM for top-end breathing)
+	var baseInDeg, baseExDeg float64
+	switch {
+	case rpm < 1400:
+		baseInDeg = 8.0 + 10.0*((rpm-800.0)/600.0)
+		baseExDeg = -4.0
+	case rpm <= 3600:
+		// Mid-range scavenging window: high intake advance + exhaust retard creates positive valve overlap
+		u := (rpm - 1400.0) / 2200.0
+		baseInDeg = 20.0 + 6.0*math.Sin(u*math.Pi)
+		baseExDeg = -8.0 - 5.0*math.Sin(u*math.Pi)
+	default:
+		// High RPM power band: taper overlap to reduce exhaust backpressure reversion
+		u := math.Min(1.0, (rpm-3600.0)/2900.0)
+		baseInDeg = 20.0 - 11.5*u
+		baseExDeg = -8.0 + 6.0*u
+	}
+
+	camInDeg := math.Max(0.0, math.Min(34.0, baseInDeg*loadFrac+0.55*overlapAdderDeg))
+	camExDeg := math.Max(-24.0, math.Min(2.0, baseExDeg*loadFrac-0.45*overlapAdderDeg))
+	overlapDeg := math.Max(0.0, camInDeg-camExDeg)
+
+	// Scavenging overlap between 1400-3800 RPM accelerates twin Garrett MGT1549DSL spool
+	spoolTauMult := 1.0
+	if rpm >= 1300 && rpm <= 4000 {
+		spoolBonus := (overlapDeg - 18.0) * 0.012
+		spoolTauMult = math.Max(0.76, math.Min(1.18, 1.0-spoolBonus))
+	}
+
+	// Volumetric efficiency modifier from cam phasing:
+	// Extra overlap helps low/mid-RPM scavenging (<4200 RPM) but excessive overlap above 5000 RPM causes exhaust reversion
+	veCamMult := 1.0
+	if rpm <= 4200 {
+		veCamMult = 1.0 + 0.0022*overlapAdderDeg
+	} else {
+		// Above 4200 RPM, slight negative overlap bias (retarded intake / advanced exhaust) improves top-end VE
+		veCamMult = 1.0 - 0.0018*overlapAdderDeg
+	}
+	veCamMult = math.Max(0.93, math.Min(1.06, veCamMult))
+
+	return camInDeg, camExDeg, overlapDeg, spoolTauMult, veCamMult
 }
 
 // ExecuteSimulation runs Run A (and optionally Run B) and computes the full A/B comparison diff.
@@ -393,9 +472,17 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 		omegaFront   = 0.0
 		omegaRear    = 0.0
 		boostHpa     = ambientHpa
+		boostTargetPsi = 0.0
 		airloadMg    = 180.0
 		accelG       = 0.0
 		prevAccelG   = 0.0
+
+		// Fuel & Dual-CVVT state
+		fuelSpec       = evalFuelThermodynamics(cfg.FuelType)
+		camInDeg       = 8.0
+		camExDeg       = -4.0
+		camOverlapDeg  = 12.0
+		krDeg          = 0.0
 
 		// ECU/TCU 10ms state
 		tqiDrvNm       = 0.0
@@ -590,13 +677,19 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 				tqiDrvNm *= spdFac
 			}
 
-			// 4b. Turbocharger Boost & Airload Dynamics
+			// 4b. Turbocharger Boost, Dual-CVVT Cam Phasing & Airload Dynamics
 			targetBoostHpa := ecu.PutSpMaxHpa
 			if ecu.BoostLimitAHpa < targetBoostHpa && ecu.BoostLimitAHpa > 1200 {
 				targetBoostHpa = ecu.BoostLimitAHpa
 			}
-			// Scale boost/airflow by user TorqueScalePct override
-			targetBoostHpa = ambientHpa + (targetBoostHpa-ambientHpa)*(cfg.Overrides.TorqueScalePct/100.0)
+			// Scale boost/airflow by user TorqueScalePct override and direct BoostAdderPsi (+1 psi = 68.9476 hPa)
+			targetBoostHpa = ambientHpa + (targetBoostHpa-ambientHpa)*(cfg.Overrides.TorqueScalePct/100.0) + cfg.Overrides.BoostAdderPsi*68.9476
+			targetBoostHpa = math.Max(ambientHpa, math.Min(3600.0, targetBoostHpa))
+			boostTargetPsi = (targetBoostHpa - ambientHpa) * 0.0145038
+
+			// Evaluate Dual-CVVT intake advance, exhaust retard, scavenging overlap, and spool/VE modifiers
+			var spoolTauMult, veCamMult float64
+			camInDeg, camExDeg, camOverlapDeg, spoolTauMult, veCamMult = evalDualCVVT(engineRPM, airloadMg, cfg.Overrides.CamOverlapAdderDeg)
 
 			// Spool capability as a function of RPM & pre-stage brake-stand / RAL antilag
 			spoolFactor := math.Min(1.0, math.Max(0.15, (engineRPM-1100.0)/1650.0))
@@ -609,44 +702,53 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 				}
 			}
 			achievableBoostHpa := ambientHpa + (targetBoostHpa-ambientHpa)*spoolFactor*(cfg.PedalPct/100.0)
-			// First-order turbo lag filter (tau ~ 180 ms in boost, faster with RAL)
-			tauSpool := 0.17
+			// First-order turbo lag filter (tau ~ 170 ms in boost, accelerated by Dual-CVVT scavenging & RAL)
+			tauSpool := 0.17 * spoolTauMult
 			if ralActive {
 				tauSpool = 0.08
 			}
 			boostHpa += (0.01 / tauSpool) * (achievableBoostHpa - boostHpa)
 
-			// Convert manifold pressure + volumetric efficiency curve to cylinder air charge (mg/stk)
+			// Convert manifold pressure + Dual-CVVT volumetric efficiency + fuel latent charge cooling to cylinder air charge (mg/stk)
 			ve := 0.90
 			if engineRPM >= 2000 && engineRPM <= 5400 {
 				ve = 1.00
 			} else if engineRPM > 5400 {
 				ve = 1.00 - 0.07*((engineRPM-5400.0)/1200.0)
 			}
-			tempDensityFactor := 293.15 / tAmbK
+			ve *= veCamMult
+			effChargeTempK := math.Max(250.0, tAmbK-fuelSpec.LatentChargeCoolC)
+			tempDensityFactor := 293.15 / effChargeTempK
 			airloadMg = (boostHpa / 2717.0) * 1350.0 * ve * tempDensityFactor
 
 			// 4c. Forward Torque Lookup (0x255518 TQI_BAS & 0x253D14.. TQI_MAX)
 			tqiBas := Interp2D(ecu.FwdRPM, ecu.FwdAir, ecu.TQIBasA, engineRPM, airloadMg)
 			tqiMax := Interp2D(ecu.FwdRPM, ecu.FwdAir, ecu.TQIMaxEnv, engineRPM, airloadMg)
 
-			// Base & Optimum Ignition Lookup (0x238090 Base High & 0x238874 Opt High)
-			igaBaseDeg = Interp2D(ecu.IgnRPM, ecu.IgnLoad, ecu.IgnBaseHigh, engineRPM, airloadMg)
+			// Base & Optimum Ignition Lookup (0x238090 Base High & 0x238874 Opt High) + Live Spark Adder Override
+			igaCommandedDeg := Interp2D(ecu.IgnRPM, ecu.IgnLoad, ecu.IgnBaseHigh, engineRPM, airloadMg) + cfg.Overrides.SparkAdvanceAdderDeg
 			igaOptDeg := Interp2D(ecu.IgnRPM, ecu.IgnLoad, ecu.IgnOptHigh, engineRPM, airloadMg)
 			igaMinMapDeg := Interp2D(ecu.IGAMinCoolant, ecu.IGAMinLoad, ecu.IGAMinHigh, env.CoolantTempC, airloadMg)
 
+			// Evaluate Fuel Octane Knock Threshold & SIM2K-260 Knock Retard (krDeg)
+			// 93 AKI supports up to (igaOptDeg - 8.8 deg) at 20C and 1250 mg/stk before knock sensor feedback pulls timing.
+			knockCeilingDeg := (igaOptDeg - 8.8) + fuelSpec.OctaneSparkOffsetDeg - 0.11*(env.AmbientTempC-20.0) - 0.007*math.Max(0.0, airloadMg-1250.0)
+			if igaCommandedDeg > knockCeilingDeg && airloadMg > 650.0 {
+				krDeg = math.Min(9.0, 0.80*(igaCommandedDeg-knockCeilingDeg))
+			} else {
+				krDeg = math.Max(0.0, krDeg-0.35) // Gradual knock recovery
+			}
+			igaBaseDeg = igaCommandedDeg - krDeg
+
 			// Calculate physical crankshaft brake torque vs. ECU internal model torque:
-			// - Physical cylinder torque is governed by physical airload (tqiMax envelope) + spark advance relative to MBT.
-			// - In KJT BEF, TQI_BAS (0x255518) is under-scaled (-5%) while WOT spark (0x238090) is advanced +4.5 deg,
-			//   producing higher physical wheel power!
-			// - In Sleepy Loud, TQI_BAS is inflated (+17% to 967.8 Nm), tripping the TCHA turbo speed limiter (0x203EC6)!
+			// - Physical cylinder torque is governed by physical airload (tqiMax envelope), spark advance relative to MBT, and fuel energy multiplier.
 			sparkAdvDeltaFromStock := igaBaseDeg - (igaOptDeg - 11.2)
-			sparkTorqueBonus := 1.0 + 0.013*math.Max(-5.0, math.Min(8.0, sparkAdvDeltaFromStock))
+			sparkTorqueBonus := 1.0 + 0.013*math.Max(-6.0, math.Min(9.0, sparkAdvDeltaFromStock))
 			pumpingFrictionLossNm := 34.0 + 0.0045*engineRPM + 0.0000010*engineRPM*engineRPM
-			physBrakeTorqueNm := math.Max(0.0, (tqiMax*0.92*sparkTorqueBonus)-pumpingFrictionLossNm)
+			physBrakeTorqueNm := math.Max(0.0, (tqiMax*0.92*sparkTorqueBonus*fuelSpec.CombustionEnergyMult)-pumpingFrictionLossNm)
 			physBrakeTorqueNm *= (cfg.Overrides.TorqueScalePct / 100.0)
 
-			tqiUncappedNm = math.Min(tqiDrvNm*(cfg.Overrides.TorqueScalePct/100.0), physBrakeTorqueNm)
+			tqiUncappedNm = math.Min(tqiDrvNm*(cfg.Overrides.TorqueScalePct/100.0)*fuelSpec.CombustionEnergyMult, physBrakeTorqueNm)
 
 			// 4d. Loud-Tune TCHA Turbo Speed Limiter Bug (0x203EC6)
 			if tchaActive && tSec >= 0.15 {
@@ -1070,6 +1172,7 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 				BrakePsi:          round2(brakePsi),
 				BoostHpa:          round2(boostHpa),
 				BoostPsi:          round2(boostPsi),
+				BoostTargetPsi:    round2(boostTargetPsi),
 				AirloadMgStk:      round2(airloadMg),
 				DriverDemandNm:    round2(tqiDrvNm),
 				UncappedTorqueNm:  round2(tqiUncappedNm),
@@ -1078,6 +1181,11 @@ func simulateSingleRun(cfg RunConfig, env EnvironmentConfig, surf SurfacePreset)
 				SparkAdvanceDeg:   round2(igaActualDeg),
 				SparkFloorDeg:     round2(igaFloorDeg),
 				SparkEfficiency:   round3(etaIga),
+				KnockRetardDeg:    round2(krDeg),
+				IntakeCamDeg:      round2(camInDeg),
+				ExhaustCamDeg:     round2(camExDeg),
+				CamOverlapDeg:     round2(camOverlapDeg),
+				Lambda:            round3(fuelSpec.CommandedLambda),
 				AWDTargetNm:       round2(awdTargetNm),
 				AWDActualNm:       round2(awdActualNm),
 				AWDFrontSplitPct:  round2(awdSplitPct),

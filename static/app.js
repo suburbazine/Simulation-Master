@@ -218,6 +218,9 @@ function applyRunConfigToForm(prefix, cfg) {
   if (cfg.awd_bin_path) document.getElementById(`${prefix}_awdBin`).value = cfg.awd_bin_path;
   document.getElementById(`${prefix}_driveMode`).value = cfg.drive_mode || "sport";
   document.getElementById(`${prefix}_escMode`).value = cfg.esc_mode || "sport";
+  if (document.getElementById(`${prefix}_fuelType`)) {
+    document.getElementById(`${prefix}_fuelType`).value = cfg.fuel_type || "93_aki";
+  }
   document.getElementById(`${prefix}_rollout`).value = String(cfg.rollout_inch || 0);
   document.getElementById(`${prefix}_preStage`).value = cfg.pre_stage_time_sec || 1.4;
   document.getElementById(`${prefix}_brakePsi`).value = cfg.brake_hold_psi || 1200;
@@ -225,6 +228,15 @@ function applyRunConfigToForm(prefix, cfg) {
 
   const ov = cfg.overrides || {};
   document.getElementById(`${prefix}_ovTorquePct`).value = ov.torque_scale_pct || 100;
+  if (document.getElementById(`${prefix}_ovBoostAdder`)) {
+    document.getElementById(`${prefix}_ovBoostAdder`).value = ov.boost_adder_psi ?? "";
+  }
+  if (document.getElementById(`${prefix}_ovSparkAdder`)) {
+    document.getElementById(`${prefix}_ovSparkAdder`).value = ov.spark_advance_adder_deg ?? "";
+  }
+  if (document.getElementById(`${prefix}_ovCamOverlap`)) {
+    document.getElementById(`${prefix}_ovCamOverlap`).value = ov.cam_overlap_adder_deg ?? "";
+  }
   document.getElementById(`${prefix}_ovSparkFloor`).value = ov.shift_spark_floor_deg ?? "";
   document.getElementById(`${prefix}_ovStallRPM`).value = ov.launch_stall_rpm ?? "";
   document.getElementById(`${prefix}_ovTcuCap`).value = ov.torque_cap_nm ?? "";
@@ -239,19 +251,25 @@ function applyRunConfigToForm(prefix, cfg) {
 
 function readRunConfigFromForm(prefix) {
   const numOrNull = (id) => {
-    const raw = document.getElementById(id).value.trim();
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const raw = el.value.trim();
     if (raw === "") return null;
     const v = parseFloat(raw);
     return isNaN(v) ? null : v;
   };
   const intOrNull = (id) => {
-    const raw = document.getElementById(id).value.trim();
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const raw = el.value.trim();
     if (raw === "") return null;
     const v = parseInt(raw, 10);
     return isNaN(v) ? null : v;
   };
   const boolOrNull = (id) => {
-    const raw = document.getElementById(id).value;
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const raw = el.value;
     if (raw === "true") return true;
     if (raw === "false") return false;
     return null;
@@ -264,6 +282,9 @@ function readRunConfigFromForm(prefix) {
     awd_bin_path: document.getElementById(`${prefix}_awdBin`).value,
     drive_mode: document.getElementById(`${prefix}_driveMode`).value,
     esc_mode: document.getElementById(`${prefix}_escMode`).value,
+    fuel_type: document.getElementById(`${prefix}_fuelType`)
+      ? document.getElementById(`${prefix}_fuelType`).value
+      : "93_aki",
     rollout_inch: parseFloat(document.getElementById(`${prefix}_rollout`).value) || 0,
     pre_stage_time_sec: parseFloat(document.getElementById(`${prefix}_preStage`).value) || 1.4,
     brake_hold_psi: parseFloat(document.getElementById(`${prefix}_brakePsi`).value) || 1200,
@@ -271,6 +292,9 @@ function readRunConfigFromForm(prefix) {
     pedal_pct: 100.0,
     overrides: {
       torque_scale_pct: parseFloat(document.getElementById(`${prefix}_ovTorquePct`).value) || 100,
+      boost_adder_psi: numOrNull(`${prefix}_ovBoostAdder`),
+      spark_advance_adder_deg: numOrNull(`${prefix}_ovSparkAdder`),
+      cam_overlap_adder_deg: numOrNull(`${prefix}_ovCamOverlap`),
       shift_spark_floor_deg: numOrNull(`${prefix}_ovSparkFloor`),
       launch_stall_rpm: numOrNull(`${prefix}_ovStallRPM`),
       torque_cap_nm: numOrNull(`${prefix}_ovTcuCap`),
@@ -598,6 +622,19 @@ function renderAllCharts() {
     rightMax: 1.1,
     seriesLeft: { key: "iga_deg", label: "Spark Advance (deg BTDC)", colorA: "#00e5ff", colorB: "#ff9100" },
     seriesRight: { key: "eta_iga", label: "Spark Efficiency (eta_iga)", colorA: "#00e676", colorB: "#ff5252" },
+  });
+
+  drawScopeChart("canvasEcu3", telA, telB, {
+    tMin: -0.5,
+    tMax: null,
+    leftUnit: "Overlap °CA",
+    leftMin: -5,
+    leftMax: 60,
+    rightUnit: "Knock °KR",
+    rightMin: 0,
+    rightMax: 10,
+    seriesLeft: { key: "cam_overlap_deg", label: "Dual-CVVT Valve Overlap (°CA)", colorA: "#00e5ff", colorB: "#ff9100" },
+    seriesRight: { key: "kr_deg", label: "Octane Knock Retard (°KR)", colorA: "#ff5252", colorB: "#ffd740" },
   });
 
   // Tab 4: AWD Split & Weight Transfer
@@ -938,9 +975,9 @@ function updateCursorReadout(t) {
   if (!sa) return;
 
   const el = document.getElementById("cursorReadout");
-  let txt = `t=${sa.t >= 0 ? "+" : ""}${sa.t.toFixed(2)}s | [A] ${sa.v_mph.toFixed(1)} mph (G${sa.gear}, ${sa.rpm.toFixed(0)} RPM, ${sa.eng_nm.toFixed(0)} Nm, Spark ${sa.iga_deg.toFixed(1)}°, AWD ${sa.awd_actual_nm.toFixed(0)} Nm, Slip ${sa.slip_r_pct.toFixed(1)}%)`;
+  let txt = `t=${sa.t >= 0 ? "+" : ""}${sa.t.toFixed(2)}s | [A] ${sa.v_mph.toFixed(1)} mph (G${sa.gear}, ${sa.rpm.toFixed(0)} RPM, ${sa.eng_nm.toFixed(0)} Nm, ${sa.boost_psi.toFixed(1)} psi, Spark ${sa.iga_deg.toFixed(1)}° / KR -${(sa.kr_deg || 0).toFixed(1)}°, CamOvl ${(sa.cam_overlap_deg || 0).toFixed(0)}°CA, AWD ${sa.awd_actual_nm.toFixed(0)} Nm)`;
   if (sb) {
-    txt += `  vs  [B] ${sb.v_mph.toFixed(1)} mph (G${sb.gear}, ${sb.rpm.toFixed(0)} RPM, ${sb.eng_nm.toFixed(0)} Nm, Spark ${sb.iga_deg.toFixed(1)}°, AWD ${sb.awd_actual_nm.toFixed(0)} Nm, Slip ${sb.slip_r_pct.toFixed(1)}%)`;
+    txt += `  vs  [B] ${sb.v_mph.toFixed(1)} mph (G${sb.gear}, ${sb.rpm.toFixed(0)} RPM, ${sb.eng_nm.toFixed(0)} Nm, ${sb.boost_psi.toFixed(1)} psi, Spark ${sb.iga_deg.toFixed(1)}° / KR -${(sb.kr_deg || 0).toFixed(1)}°, CamOvl ${(sb.cam_overlap_deg || 0).toFixed(0)}°CA, AWD ${sb.awd_actual_nm.toFixed(0)} Nm)`;
   }
   el.textContent = txt;
 }

@@ -82,11 +82,14 @@ type EnvironmentConfig struct {
 // OverrideConfig allows non-destructive live A/B what-if tuning on top of any loaded binary.
 type OverrideConfig struct {
 	// ECU overrides
-	TorqueScalePct     float64 `json:"torque_scale_pct"`      // 100 = binary native, e.g. 115 = +15% airflow/boost
-	ShiftSparkFloorDeg *float64 `json:"shift_spark_floor_deg"` // Override 0x207AD9 shift spark floor (deg BTDC)
-	TCSInhibit         *int     `json:"tcs_inhibit"`           // Override 0x200B4B (0=Stock TCS, 1=TCS Inhibited)
-	TCHASurgeFix       *bool    `json:"tcha_surge_fix"`        // Force disable 0x203EC6 turbo overspeed torque cut
-	RALAntilagActive   *bool    `json:"ral_antilag_active"`    // Force enable/disable 0x808DC000 Rolling Antilag brake-boost
+	TorqueScalePct       float64  `json:"torque_scale_pct"`        // 100 = binary native, e.g. 115 = +15% airflow/boost
+	SparkAdvanceAdderDeg float64  `json:"spark_advance_adder_deg"` // Direct WOT spark timing adder in deg BTDC (-6..+8)
+	BoostAdderPsi        float64  `json:"boost_adder_psi"`         // Direct boost target adder in psi (-6..+8)
+	CamOverlapAdderDeg   float64  `json:"cam_overlap_adder_deg"`   // Dual-CVVT valve overlap bias in deg CA (-10..+10)
+	ShiftSparkFloorDeg   *float64 `json:"shift_spark_floor_deg"`   // Override 0x207AD9 shift spark floor (deg BTDC)
+	TCSInhibit           *int     `json:"tcs_inhibit"`             // Override 0x200B4B (0=Stock TCS, 1=TCS Inhibited)
+	TCHASurgeFix         *bool    `json:"tcha_surge_fix"`          // Force disable 0x203EC6 turbo overspeed torque cut
+	RALAntilagActive     *bool    `json:"ral_antilag_active"`      // Force enable/disable 0x808DC000 Rolling Antilag brake-boost
 
 	// TCU overrides
 	LaunchStallRPM    *float64 `json:"launch_stall_rpm"`     // Override 0x238B68 brake-stall RPM limit
@@ -109,6 +112,7 @@ type RunConfig struct {
 	ECUBinPath       string         `json:"ecu_bin_path"`
 	TCUBinPath       string         `json:"tcu_bin_path"`
 	AWDBinPath       string         `json:"awd_bin_path"`
+	FuelType         string         `json:"fuel_type"`          // "93_aki", "91_aki", "93_wmi", "e30", "e50", "e85"
 	DriveMode        string         `json:"drive_mode"`         // "sport", "comfort", "eco", "custom_m4"
 	ESCMode          string         `json:"esc_mode"`           // "on", "sport", "off"
 	PreStageTimeSec  float64        `json:"pre_stage_time_sec"` // Brake-stand build time before launch (e.g. 1.5 s)
@@ -243,6 +247,7 @@ type TelemetrySample struct {
 	BrakePsi          float64 `json:"brake_psi"`
 	BoostHpa          float64 `json:"boost_hpa"`
 	BoostPsi          float64 `json:"boost_psi"`
+	BoostTargetPsi    float64 `json:"boost_target_psi"`
 	AirloadMgStk      float64 `json:"airload_mg"`
 	DriverDemandNm    float64 `json:"tqi_drv_nm"`
 	UncappedTorqueNm  float64 `json:"tqi_uncapped_nm"`
@@ -251,6 +256,11 @@ type TelemetrySample struct {
 	SparkAdvanceDeg   float64 `json:"iga_deg"`
 	SparkFloorDeg     float64 `json:"iga_floor_deg"`
 	SparkEfficiency   float64 `json:"eta_iga"`
+	KnockRetardDeg    float64 `json:"kr_deg"`
+	IntakeCamDeg      float64 `json:"cam_in_deg"`
+	ExhaustCamDeg     float64 `json:"cam_ex_deg"`
+	CamOverlapDeg     float64 `json:"cam_overlap_deg"`
+	Lambda            float64 `json:"lambda"`
 	AWDTargetNm       float64 `json:"awd_target_nm"`
 	AWDActualNm       float64 `json:"awd_actual_nm"`
 	AWDFrontSplitPct  float64 `json:"awd_split_pct"`
