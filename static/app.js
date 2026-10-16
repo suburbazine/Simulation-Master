@@ -1636,17 +1636,17 @@ function formatBytes(bytes) {
 // INTERACTIVE 3D KIA STINGER GT (CK) WIREFRAME, SUB-MODULE STRESS & THERMAL STUDIO
 // ============================================================================
 const chassis3DState = {
-  yaw: 0.65,
-  pitch: 0.34,
-  dist: 5.2,
+  yaw: -0.52,
+  pitch: 0.44,
+  dist: 5.1,
   targetX: 0.0,
-  targetY: 0.52,
+  targetY: 0.42,
   targetZ: 0.0,
-  goalYaw: 0.65,
-  goalPitch: 0.34,
-  goalDist: 5.2,
+  goalYaw: -0.52,
+  goalPitch: 0.44,
+  goalDist: 5.1,
   goalTargetX: 0.0,
-  goalTargetY: 0.52,
+  goalTargetY: 0.42,
   goalTargetZ: 0.0,
   focusModule: "all",
   activeRun: "B",
@@ -1665,13 +1665,13 @@ const chassis3DState = {
 };
 
 const MODULE_CAMERA_TARGETS = {
-  all: { x: 0.0, y: 0.52, z: 0.0, dist: 5.2, yaw: 0.65, pitch: 0.34, label: "ALL MODULES (FULL STINGER GT)" },
-  engine: { x: 1.48, y: 0.50, z: 0.0, dist: 2.25, yaw: 0.62, pitch: 0.40, label: "1. 3.3L TWIN-TURBO V6 & FMIC" },
-  trans: { x: 0.58, y: 0.36, z: 0.0, dist: 2.05, yaw: 0.42, pitch: 0.30, label: "2. A8LR1 8AT & TORQUE CONVERTER" },
-  awd: { x: 0.04, y: 0.35, z: 0.06, dist: 1.75, yaw: 0.48, pitch: 0.34, label: "3. MAGNA ATC AWD TRANSFER CASE" },
-  driveline_f: { x: 0.95, y: 0.33, z: 0.12, dist: 2.35, yaw: 0.52, pitch: 0.44, label: "4. FRONT PROPSHAFT, DIFF & AXLES" },
-  driveline_r: { x: -0.85, y: 0.34, z: 0.0, dist: 2.40, yaw: -0.58, pitch: 0.34, label: "5. REAR PROPSHAFT, LSD & AXLES" },
-  tires: { x: 0.0, y: 0.36, z: 0.42, dist: 4.10, yaw: 0.38, pitch: 0.20, label: "6. TIRES, WHEELS & BREMBO BRAKES" },
+  all: { x: 0.0, y: 0.42, z: 0.0, dist: 5.1, yaw: -0.52, pitch: 0.44, label: "ALL MODULES [1-7] (FULL STINGER GT)" },
+  engine: { x: 1.42, y: 0.46, z: 0.0, dist: 2.25, yaw: -0.45, pitch: 0.52, label: "[1] 3.3L TWIN-TURBO V6 & FMIC" },
+  trans: { x: 0.66, y: 0.36, z: 0.0, dist: 2.05, yaw: -0.35, pitch: 0.48, label: "[2] A8LR1 8AT & TORQUE CONVERTER" },
+  awd: { x: 0.16, y: 0.36, z: 0.16, dist: 1.75, yaw: -0.30, pitch: 0.58, label: "[5] MAGNA ATC AWD TRANSFER CASE" },
+  driveline_f: { x: 0.88, y: 0.35, z: 0.24, dist: 2.35, yaw: -0.25, pitch: 0.62, label: "[6,7] FRONT PROPSHAFT, DIFF & SUMP AXLE" },
+  driveline_r: { x: -0.82, y: 0.35, z: 0.0, dist: 2.45, yaw: 0.35, pitch: 0.46, label: "[3,4] REAR PROPSHAFT, LSD & AXLES" },
+  tires: { x: 0.0, y: 0.34, z: 0.0, dist: 4.6, yaw: -0.38, pitch: 0.35, label: "TIRES, WHEELS & BREMBO BRAKES" },
 };
 
 function setupChassis3DStudio() {
@@ -1690,8 +1690,8 @@ function setupChassis3DStudio() {
     const dy = e.clientY - chassis3DState.lastMouseY;
     chassis3DState.lastMouseX = e.clientX;
     chassis3DState.lastMouseY = e.clientY;
-    chassis3DState.yaw -= dx * 0.0085;
-    chassis3DState.pitch = Math.max(-1.25, Math.min(1.50, chassis3DState.pitch + dy * 0.0075));
+    chassis3DState.yaw += dx * 0.0085;
+    chassis3DState.pitch = Math.max(-1.25, Math.min(1.52, chassis3DState.pitch + dy * 0.0075));
     chassis3DState.goalYaw = chassis3DState.yaw;
     chassis3DState.goalPitch = chassis3DState.pitch;
     renderChassis3DScene();
@@ -1714,7 +1714,7 @@ function setupChassis3DStudio() {
     });
   });
 
-  // Camera Angle Presets (Orthonormal Turntable Angles)
+  // Camera Angle Presets (Aligned 1-for-1 with the Stinger Service Manual Schematic)
   document.querySelectorAll(".cam-preset-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const mode = btn.dataset.cam;
@@ -1724,23 +1724,23 @@ function setupChassis3DStudio() {
       chassis3DState.goalTargetZ = basePreset.z;
 
       if (mode === "iso") {
-        // 3/4 Front-Right Isometric View
-        chassis3DState.goalYaw = 0.65;
-        chassis3DState.goalPitch = 0.34;
+        // 3/4 Isometric View (Front [1] on Left, Rear [3] on Right, Transfer Case [5] & Front Propshaft [6] on Top-Left)
+        chassis3DState.goalYaw = -0.52;
+        chassis3DState.goalPitch = 0.44;
         chassis3DState.goalDist = basePreset.dist;
       } else if (mode === "side") {
-        // Pure Side Squat Profile (+X Nose on Right, -X Tail on Left, +Y Roof on Top)
+        // Pure Side Squat Profile (Front [1] on Left, Rear [3] on Right, Roof +Y on Top)
         chassis3DState.goalYaw = 0.0;
         chassis3DState.goalPitch = 0.05;
         chassis3DState.goalDist = chassis3DState.focusModule === "all" ? 5.0 : basePreset.dist;
       } else if (mode === "top") {
-        // Overhead Top X-Ray Plan View (+X Nose on Right, -X Tail on Left)
+        // Exact Top-Down Schematic Plan View (Matches uploaded diagram: [1] Front Left, [3] Rear Right, [5,6,7] Top RH side)
         chassis3DState.goalYaw = 0.0;
-        chassis3DState.goalPitch = 1.48;
-        chassis3DState.goalDist = chassis3DState.focusModule === "all" ? 5.4 : basePreset.dist * 1.15;
+        chassis3DState.goalPitch = 1.50;
+        chassis3DState.goalDist = chassis3DState.focusModule === "all" ? 5.2 : basePreset.dist * 1.15;
       } else if (mode === "under") {
-        // Underbody AWD & Exhaust View (Camera below ground looking up at drivetrain)
-        chassis3DState.goalYaw = 0.45;
+        // Underbody AWD & Exhaust View (Looking up from below ground)
+        chassis3DState.goalYaw = -0.38;
         chassis3DState.goalPitch = -0.58;
         chassis3DState.goalDist = chassis3DState.focusModule === "all" ? 4.8 : basePreset.dist;
       }
@@ -2086,12 +2086,13 @@ function renderChassis3DScene() {
   // Update the 6 Sub-Module Inspector Cards on the right
   renderSubmoduleInspectorCards(sample);
 
-  // Orthonormal Right-Handed Turntable LookAt Camera Basis:
-  // World Axes: +X = Front Nose, +Y = Vertical Roof Up, +Z = Right/Passenger Side
-  // Spherical Camera Eye around Target (targetX, targetY, targetZ):
-  //   yaw = 0, pitch = 0 -> Eye on +Z side looking toward -Z (+X Front on Right, +Y Up on Top)
-  //   pitch > 0          -> Eye above Target looking down at roof/hood
-  //   pitch < 0          -> Eye below Target looking up at underbody
+  // Orthonormal Right-Handed Turntable LookAt Camera Basis (Matched to Stinger Service Schematic):
+  // World Axes:
+  //   +X = Front of Vehicle ([1] V6 Engine, [7] Front Diff) -> Projects to LEFT of screen at yaw=0
+  //   -X = Rear of Vehicle ([3] Rear Diff)                  -> Projects to RIGHT of screen at yaw=0
+  //   +Y = Vertical Roof Up                                 -> Projects to TOP of screen in Side/Iso views
+  //   +Z = RH / Passenger Side ([5] Transfer Case arm, [6] Front Propshaft, [7] Front Diff) -> TOP of screen in Top X-Ray view
+  //   -Z = LH / Driver Side (Through-Sump Front Axle Tube)  -> BOTTOM of screen in Top X-Ray view
   const cosY = Math.cos(chassis3DState.yaw);
   const sinY = Math.sin(chassis3DState.yaw);
   const cosP = Math.cos(chassis3DState.pitch);
@@ -2099,24 +2100,24 @@ function renderChassis3DScene() {
   const dist = chassis3DState.dist;
 
   // Camera Eye Position in World Space
-  const eyeX = chassis3DState.targetX + dist * cosP * sinY;
+  const eyeX = chassis3DState.targetX - dist * cosP * sinY;
   const eyeY = chassis3DState.targetY + dist * sinP;
-  const eyeZ = chassis3DState.targetZ + dist * cosP * cosY;
+  const eyeZ = chassis3DState.targetZ - dist * cosP * cosY;
 
   // Camera Forward Unit Vector F = normalize(Target - Eye)
-  const fx = -cosP * sinY;
+  const fx = cosP * sinY;
   const fy = -sinP;
-  const fz = -cosP * cosY;
+  const fz = cosP * cosY;
 
-  // Camera Right Unit Vector R (Horizontal Right on Screen)
-  const rxCam = cosY;
+  // Camera Right Unit Vector R = F x WorldUp (Horizontal Right on Screen; -X Rear is Right, +X Front is Left)
+  const rxCam = -cosY;
   const ryCam = 0.0;
-  const rzCam = -sinY;
+  const rzCam = sinY;
 
-  // Camera True Up Unit Vector U = R x F (Vertical Up on Screen; U_y = cosP > 0 always!)
-  const uxCam = -sinP * sinY;
+  // Camera True Up Unit Vector U = R x F (Vertical Up on Screen; U_y = cosP > 0, U_z = +sinP at yaw=0)
+  const uxCam = -sinY * sinP;
   const uyCam = cosP;
-  const uzCam = -sinP * cosY;
+  const uzCam = cosY * sinP;
 
   const fov = Math.min(w, h) * 1.12;
 
@@ -2216,7 +2217,7 @@ function renderChassis3DScene() {
     brakes: Math.min(100, ((sample.brake_psi || 0) / 1200.0) * 95.0),
   };
 
-  // Build 3D wireframe line segments for Stinger GT body shell + 6 sub-modules
+  // Build 3D wireframe line segments for Stinger GT body shell + [1..7] driveline sub-modules
   const airflowRestr = parseFloat(document.getElementById("inpAirflowRestrPct")?.value) || 0;
   const segments = buildStingerWireframeSegments(sample, heatVals, airflowRestr);
 
@@ -2277,57 +2278,57 @@ function renderChassis3DScene() {
   }
   ctx.shadowBlur = 0;
 
-  // Render 3D Sub-Module Floating Callout Pins & Hot-Spot Readouts
+  // Render Numbered [1..7] Schematic Sub-Module Callout Pins & Live Hot-Spot Readouts
   const callouts = [
     {
       mod: "engine",
-      x: 1.48,
-      y: 0.78,
-      z: 0.0,
-      title: "3.3T G6DP + TWIN TURBOS",
+      x: 1.44,
+      y: 0.68,
+      z: -0.18,
+      title: "[1] 3.3T V6 ENGINE (G6DP)",
       sub: `Stress ${(sample.stress_engine_pct || 0).toFixed(0)}% | EGT ${(sample.temp_egt_c || 0).toFixed(0)}°C | IAT ${(sample.temp_iat_c || 0).toFixed(0)}°C`,
       heat: Math.max(heatVals.engine_block, heatVals.turbos_emap),
     },
     {
       mod: "trans",
-      x: 0.58,
-      y: 0.58,
-      z: -0.15,
-      title: "A8LR1 8AT & CONVERTER",
+      x: 0.68,
+      y: 0.50,
+      z: -0.18,
+      title: "[2] 8AT TRANS (A8LR1) & TC",
       sub: `Stress ${(sample.stress_trans_pct || 0).toFixed(0)}% | ATF ${(sample.temp_trans_c || 0).toFixed(1)}°C | Slip ${(sample.tc_slip_kw || 0).toFixed(0)}kW`,
       heat: heatVals.trans_tc,
     },
     {
       mod: "awd",
-      x: 0.04,
+      x: 0.16,
       y: 0.52,
-      z: 0.22,
-      title: "MAGNA ATC AWD CASE",
+      z: 0.34,
+      title: "[5] MAGNA ATC AWD CASE",
       sub: `Stress ${(sample.stress_awd_pct || 0).toFixed(0)}% | ${(sample.temp_awd_c || 0).toFixed(1)}°C | ${Math.round(sample.awd_actual_nm || 0)}Nm`,
       heat: heatVals.awd_case,
     },
     {
       mod: "driveline_f",
-      x: 1.15,
-      y: 0.25,
-      z: 0.42,
-      title: "FRONT DRIVELINE",
+      x: 0.85,
+      y: 0.42,
+      z: 0.40,
+      title: "[6,7] FRONT PROPSHAFT & DIFF",
       sub: `Stress ${(sample.stress_drive_f_pct || 0).toFixed(0)}% | Diff ${(sample.temp_front_diff_c || 0).toFixed(1)}°C`,
       heat: heatVals.driveline_f,
     },
     {
       mod: "driveline_r",
-      x: -1.25,
-      y: 0.48,
-      z: 0.0,
-      title: "REAR DRIVELINE & LSD",
+      x: -0.62,
+      y: 0.42,
+      z: -0.05,
+      title: "[4] REAR PROPSHAFT & [3] LSD",
       sub: `Stress ${(sample.stress_drive_r_pct || 0).toFixed(0)}% | LSD ${(sample.temp_rear_diff_c || 0).toFixed(1)}°C`,
       heat: heatVals.driveline_r,
     },
     {
       mod: "tires",
       x: -1.45,
-      y: 0.72,
+      y: 0.68,
       z: 0.82,
       title: "REAR TIRES (255/35R19)",
       sub: `Stress ${(sample.stress_tire_r_pct || 0).toFixed(0)}% | Tread ${(sample.temp_tire_r_c || 0).toFixed(1)}°C | Slip ${(sample.slip_r_pct || 0).toFixed(1)}%`,
@@ -2379,8 +2380,8 @@ function renderChassis3DScene() {
     ctx.fillText(c.sub, lx + 5, ly - 1);
   });
 
-  // Render 3D Orientation Triad Gizmo in Bottom-Right Corner (+X FRONT, +Y UP, +Z RIGHT)
-  const gx = w - 64;
+  // Render 3D Orientation Triad Gizmo in Bottom-Right Corner (+X FRONT, +Y UP, +Z RH)
+  const gx = w - 68;
   const gy = h - 48;
   const axisLen = 28;
   const drawAxisVec = (ax, ay, az, color, label) => {
@@ -2399,10 +2400,10 @@ function renderChassis3DScene() {
   };
   drawAxisVec(1, 0, 0, "#00e5ff", "+X FRONT");
   drawAxisVec(0, 1, 0, "#00e676", "+Y UP");
-  drawAxisVec(0, 0, 1, "#ffab00", "+Z RIGHT");
+  drawAxisVec(0, 0, 1, "#ffab00", "+Z RH");
 }
 
-// Construct the 3D Kia Stinger GT Fastback Chassis Shell + 6 Internal Powertrain Sub-Modules
+// Construct the 3D Kia Stinger GT Fastback Chassis Shell + [1..7] Schematic-Matched Powertrain Sub-Modules
 function buildStingerWireframeSegments(sample, heatVals, airflowRestrPct) {
   const segs = [];
 
@@ -2439,7 +2440,19 @@ function buildStingerWireframeSegments(sample, heatVals, airflowRestrPct) {
       const y1 = cy + Math.cos(a1) * r, z1 = cz + Math.sin(a1) * r;
       addSeg(x0, y0, z0, x0, y1, z1, opts);
       addSeg(x1, y0, z0, x1, y1, z1, opts);
-      if (i % 2 === 0) addSeg(x0, y0, z0, x1, y0, z0, opts);
+      addSeg(x0, y0, z0, x1, y0, z0, opts);
+    }
+  };
+
+  const addCylinderY = (cx, y0, y1, cz, r, sides, opts) => {
+    for (let i = 0; i < sides; i++) {
+      const a0 = (i / sides) * Math.PI * 2;
+      const a1 = ((i + 1) / sides) * Math.PI * 2;
+      const x0 = cx + Math.cos(a0) * r, z0 = cz + Math.sin(a0) * r;
+      const x1 = cx + Math.cos(a1) * r, z1 = cz + Math.sin(a1) * r;
+      addSeg(x0, y0, z0, x1, y0, z1, opts);
+      addSeg(x0, y1, z0, x1, y1, z1, opts);
+      if (i % 2 === 0) addSeg(x0, y0, z0, x0, y1, z0, opts);
     }
   };
 
@@ -2458,10 +2471,9 @@ function buildStingerWireframeSegments(sample, heatVals, airflowRestrPct) {
   // ==========================================================================
   // 0. KIA STINGER GT (CK) FASTBACK BODY WIREFRAME SHELL ("chassis")
   // ==========================================================================
-  const chassisOpts = { module: "chassis", color: "rgba(56, 189, 248, 0.26)", width: 1.15 };
-  const chassisAccent = { module: "chassis", color: "rgba(56, 189, 248, 0.42)", width: 1.35 };
+  const chassisOpts = { module: "chassis", color: "rgba(56, 189, 248, 0.22)", width: 1.1 };
+  const chassisAccent = { module: "chassis", color: "rgba(56, 189, 248, 0.36)", width: 1.3 };
 
-  // Longitudinal profile stations [x, yBottom, yBeltline, yRoofCenter, zHalfWidth, zRoofWidth]
   const bodyStations = [
     [2.36, 0.17, 0.56, 0.58, 0.76, 0.62], // Front splitter & Tiger-Nose bumper
     [2.12, 0.17, 0.72, 0.75, 0.86, 0.72], // Headlights & hood leading edge
@@ -2476,7 +2488,6 @@ function buildStingerWireframeSegments(sample, heatVals, airflowRestrPct) {
 
   for (let i = 0; i < bodyStations.length; i++) {
     const [x, yb, ym, yr, zw, zrw] = bodyStations[i];
-    // Cross-section ribs
     addSeg(x, yb, -zw, x, yb, zw, chassisOpts);
     addSeg(x, yb, -zw, x, ym, -zw, chassisOpts);
     addSeg(x, yb, zw, x, ym, zw, chassisOpts);
@@ -2486,7 +2497,6 @@ function buildStingerWireframeSegments(sample, heatVals, airflowRestrPct) {
 
     if (i < bodyStations.length - 1) {
       const [nx, nyb, nym, nyr, nzw, nzrw] = bodyStations[i + 1];
-      // Left & Right sills, beltlines, roof rails, and centerline spine
       addSeg(x, yb, -zw, nx, nyb, -nzw, chassisOpts);
       addSeg(x, yb, zw, nx, nyb, nzw, chassisOpts);
       addSeg(x, ym, -zw, nx, nym, -nzw, chassisAccent);
@@ -2528,7 +2538,6 @@ function buildStingerWireframeSegments(sample, heatVals, airflowRestrPct) {
       color: afColor,
       width: 1.5,
     });
-    // Underbody cooling stream past transmission & AWD transfer case
     const underX = 1.6 - phase * 1.4;
     addSeg(underX, 0.16, zStr * 0.5, underX - 0.35, 0.16, zStr * 0.5, {
       module: "awd",
@@ -2538,88 +2547,115 @@ function buildStingerWireframeSegments(sample, heatVals, airflowRestrPct) {
   });
 
   // ==========================================================================
-  // 1. SUB-MODULE: 3.3L V6 TWIN-TURBO ENGINE (G6DP), FMIC & EXHAUST ("engine")
+  // [1] SUB-MODULE: 3.3L V6 TWIN-TURBO ENGINE (G6DP), 6 CYLINDERS, FMIC & TURBOS
+  // Positioned directly over the front axle (X = +1.06 .. +1.80 m, Z = -0.24 .. +0.24 m)
   // ==========================================================================
-  const engOpts = { module: "engine", heat: heatVals.engine_block, width: 1.85, glow: heatVals.engine_block > 72 };
-  const turboOpts = { module: "engine", heat: heatVals.turbos_emap, width: 2.1, glow: true };
-  const fmicOpts = { module: "engine", heat: heatVals.fmic_intake, width: 1.8 };
+  const engOpts = { module: "engine", heat: heatVals.engine_block, width: 1.9, glow: heatVals.engine_block > 72 };
+  const cylOpts = { module: "engine", heat: Math.min(100, heatVals.engine_block + 8), width: 2.0, glow: true };
+  const turboOpts = { module: "engine", heat: heatVals.turbos_emap, width: 2.0, glow: true };
+  const fmicOpts = { module: "engine", heat: heatVals.fmic_intake, width: 1.75 };
 
-  // Front-Mount Intercooler (FMIC) Core at X = +2.16m & Charge Pipes
-  addBox(2.16, 0.34, 0.0, 0.11, 0.24, 0.92, fmicOpts);
-  // Left & Right FMIC charge pipes to twin compressors & top intake plenum
-  addSeg(2.10, 0.34, -0.44, 1.45, 0.45, -0.38, fmicOpts);
-  addSeg(2.10, 0.34, 0.44, 1.45, 0.45, 0.38, fmicOpts);
-  addSeg(2.10, 0.44, 0.0, 1.52, 0.72, 0.0, fmicOpts);
+  // V6 Engine Block Deck & Upper Oil Pan (Straddling Front Axle X = +1.45 m, Z = -0.24 .. +0.24 m)
+  addBox(1.43, 0.42, 0.0, 0.72, 0.28, 0.48, engOpts);
+  // Green/Adapter Bellhousing Flange at rear of V6 block (X = +0.98 .. +1.07 m, matching schematic [1] rear step)
+  addBox(1.025, 0.41, 0.0, 0.09, 0.26, 0.44, engOpts);
 
-  // 3.3L 60-deg V6 Short Block & Deep-Skirt Bedplate (X = +1.12 .. +1.70m)
-  addBox(1.41, 0.44, 0.0, 0.56, 0.26, 0.38, engOpts);
-  // Left & Right V6 Cylinder Banks & Dual-CVVT Cam Covers
-  addBox(1.42, 0.60, -0.21, 0.52, 0.16, 0.20, engOpts);
-  addBox(1.42, 0.60, 0.21, 0.52, 0.16, 0.20, engOpts);
-  // Top Surge Tank / Twin-Throttle Intake Manifold Plenum
-  addBox(1.42, 0.73, 0.0, 0.44, 0.10, 0.26, engOpts);
+  // 6 Distinct V6 Cylinder Domes on top of Block [1] (3 on RH +Z bank, 3 on LH -Z bank, matching schematic [1])
+  [1.65, 1.43, 1.21].forEach((cx) => {
+    addCylinderY(cx, 0.56, 0.63, 0.12, 0.095, 10, cylOpts);  // RH Bank (Cylinders 1, 3, 5)
+    addCylinderY(cx, 0.56, 0.63, -0.12, 0.095, 10, cylOpts); // LH Bank (Cylinders 2, 4, 6)
+  });
 
-  // Twin Garrett MGT1549DSL / Hybrid Turbochargers (Left & Right Banks)
-  addCylinderX(1.22, 1.42, 0.46, -0.36, 0.11, 8, turboOpts);
-  addCylinderX(1.22, 1.42, 0.46, 0.36, 0.11, 8, turboOpts);
-
-  // Twin Downpipes & Mid-Pipes routing back to Quad Exhaust
-  addSeg(1.22, 0.44, -0.36, 0.85, 0.22, -0.26, turboOpts);
-  addSeg(1.22, 0.44, 0.36, 0.85, 0.22, 0.26, turboOpts);
-  addSeg(0.85, 0.22, -0.26, -2.35, 0.24, -0.48, { module: "engine", heat: heatVals.turbos_emap * 0.85, width: 1.5 });
-  addSeg(0.85, 0.22, 0.26, -2.35, 0.24, 0.48, { module: "engine", heat: heatVals.turbos_emap * 0.85, width: 1.5 });
+  // Front-Mount Intercooler (FMIC) Core at Nose (X = +2.16 m) & Twin Turbochargers
+  addBox(2.16, 0.34, 0.0, 0.10, 0.22, 0.88, fmicOpts);
+  addSeg(2.11, 0.34, -0.40, 1.50, 0.44, -0.32, fmicOpts);
+  addSeg(2.11, 0.34, 0.40, 1.50, 0.44, 0.32, fmicOpts);
+  // Twin Garrett MGT1549DSL Turbochargers tucked on lower flanks of V6 block
+  addCylinderX(1.16, 1.36, 0.38, -0.32, 0.09, 8, turboOpts);
+  addCylinderX(1.16, 1.36, 0.38, 0.32, 0.09, 8, turboOpts);
 
   // ==========================================================================
-  // 2. SUB-MODULE: A8LR1 8-SPEED AUTOMATIC & TORQUE CONVERTER ("trans")
+  // [2] SUB-MODULE: A8LR1 8-SPEED AUTOMATIC TRANSMISSION & TORQUE CONVERTER
+  // Bolted directly behind [1] along centerline Z = 0.0 (X = +0.34 .. +0.98 m)
   // ==========================================================================
   const tcOpts = { module: "trans", heat: heatVals.trans_tc, width: 2.1, glow: heatVals.trans_tc > 68 };
-  const transOpts = { module: "trans", heat: heatVals.trans_case, width: 1.85, glow: heatVals.trans_case > 72 };
+  const transOpts = { module: "trans", heat: heatVals.trans_case, width: 1.9, glow: heatVals.trans_case > 72 };
 
-  // Hydrokinetic Torque Converter Housing & Torus (X = +0.86 .. +1.12m)
-  addCylinderX(0.86, 1.12, 0.38, 0.0, 0.18, 10, tcOpts);
-  // A8LR1 8-Speed Planetary Gearset Main Case (X = +0.22 .. +0.86m)
-  addCylinderX(0.22, 0.86, 0.38, 0.0, 0.15, 8, transOpts);
-  // Finned Aluminum ATF Oil Pan & Valvebody Sump underneath
-  addBox(0.54, 0.23, 0.0, 0.56, 0.07, 0.28, transOpts);
-
-  // ==========================================================================
-  // 3. SUB-MODULE: MAGNA ATC ACTIVE AWD TRANSFER CASE ("awd")
-  // ==========================================================================
-  const awdOpts = { module: "awd", heat: heatVals.awd_case, width: 2.15, glow: heatVals.awd_case > 65 };
-
-  // Main Transfer Case Housing (X = -0.14 .. +0.22m)
-  addBox(0.04, 0.36, 0.04, 0.34, 0.22, 0.32, awdOpts);
-  // Wet Multi-Plate Clutch Pack Drum (0..1000 Nm coupling)
-  addCylinderX(-0.10, 0.16, 0.38, 0.0, 0.13, 10, awdOpts);
-  // Offset Front Output Drop-Gear & VCM Electro-Hydraulic Pump Actuator (Right side Z = +0.22m)
-  addCylinderX(-0.08, 0.18, 0.33, 0.22, 0.10, 8, awdOpts);
+  // Torque Converter Bellhousing (X = +0.78 .. +0.98 m, Z = 0.0 m)
+  addCylinderX(0.78, 0.98, 0.37, 0.0, 0.175, 10, tcOpts);
+  // 8AT Main Planetary Case (X = +0.34 .. +0.78 m, Z = 0.0 m, matching silver cylinder [2] in schematic)
+  addCylinderX(0.34, 0.78, 0.37, 0.0, 0.155, 10, transOpts);
+  addBox(0.60, 0.23, 0.0, 0.48, 0.06, 0.28, transOpts);
 
   // ==========================================================================
-  // 4. SUB-MODULE: FRONT DRIVELINE — PROPSHAFT, FRONT DIFF & HALFSHAFTS ("driveline_f")
+  // [5] SUB-MODULE: MAGNA ATC ACTIVE AWD TRANSFER CASE (95447-4J105)
+  // Asymmetric L-shaped housing at rear of 8AT (X = -0.02 .. +0.34 m) with
+  // lateral chain-drive drop-arm extending to RH (+Z = +0.36 m) & 3-bolt rear guibo flange
   // ==========================================================================
-  const drvFOpts = { module: "driveline_f", heat: heatVals.driveline_f, width: 1.85, glow: heatVals.driveline_f > 68 };
+  const awdOpts = { module: "awd", heat: heatVals.awd_case, width: 2.2, glow: heatVals.awd_case > 62 };
 
-  // Offset Front Propshaft from Magna ATC output (X = +0.18, Z = +0.22) to Front Diff (X = +1.45, Z = +0.12)
-  addCylinderX(0.18, 1.42, 0.33, 0.18, 0.045, 6, drvFOpts);
-  // Front Differential Housing (X = +1.45m, Y = 0.33m, Z = +0.08m)
-  addBox(1.45, 0.33, 0.08, 0.22, 0.20, 0.24, drvFOpts);
-  // Front Left & Right CV Halfshafts out to Front Wheel Hubs (Z = -0.78 .. +0.78m)
-  addSeg(1.45, 0.33, -0.04, 1.45, 0.33, -0.76, { ...drvFOpts, width: 2.3 });
-  addSeg(1.45, 0.33, 0.20, 1.45, 0.33, 0.76, { ...drvFOpts, width: 2.3 });
+  // Main Centerline Wet Multi-Plate Clutch Housing (X = +0.04 .. +0.34 m, Z = 0.0 m)
+  addBox(0.22, 0.37, 0.0, 0.24, 0.28, 0.34, awdOpts);
+  addCylinderX(0.02, 0.26, 0.37, 0.0, 0.135, 10, awdOpts);
+  // Rear 3-Bolt Guibo Output Flange at X = -0.02 .. +0.02 m (matching inset CAD diagram)
+  addCylinderX(-0.02, 0.02, 0.37, 0.0, 0.105, 6, awdOpts);
+
+  // Lateral Chain-Drive Drop-Arm extending upward in Top View to RH side (Z = 0.0 .. +0.44 m, X = +0.12 .. +0.28 m)
+  addBox(0.20, 0.36, 0.22, 0.16, 0.22, 0.48, awdOpts);
+  // Front Output Gear Housing & Flange on RH side at Z = +0.36 m facing Forward Propshaft [6]
+  addCylinderX(0.10, 0.30, 0.36, 0.36, 0.10, 8, awdOpts);
+  addCylinderX(0.30, 0.34, 0.36, 0.36, 0.115, 6, awdOpts);
+  // Electro-Hydraulic VCM Actuator Motor Boss on outer RH tip (Z = +0.45 m)
+  addCylinderX(0.08, 0.24, 0.35, 0.45, 0.065, 8, awdOpts);
 
   // ==========================================================================
-  // 5. SUB-MODULE: REAR DRIVELINE — PROPSHAFT, REAR LSD & HALFSHAFTS ("driveline_r")
+  // [6] & [7] SUB-MODULE: FRONT PROPSHAFT [6], FRONT DIFF [7] & THROUGH-SUMP AXLE
+  // Matches schematic: [6] runs parallel to 8AT on RH (+Z = +0.36 m) into [7] Front Diff
+  // beside V6 block [1]; LH front axle passes through V6 oil pan via silver jackshaft tube!
   // ==========================================================================
-  const drvROpts = { module: "driveline_r", heat: heatVals.driveline_r, width: 2.0, glow: heatVals.driveline_r > 68 };
+  const drvFOpts = { module: "driveline_f", heat: heatVals.driveline_f, width: 1.95, glow: heatVals.driveline_f > 65 };
+  const flangeFOpts = { module: "driveline_f", heat: Math.min(100, heatVals.driveline_f + 12), width: 2.2 };
 
-  // Two-Piece Rear Main Propshaft (X = -0.14 .. -1.34m) + Center Carrier Bearing at X = -0.72m
-  addCylinderX(-1.34, -0.14, 0.34, 0.0, 0.055, 6, drvROpts);
-  addBox(-0.72, 0.34, 0.0, 0.08, 0.14, 0.18, drvROpts);
-  // Rear Limited-Slip Differential (LSD) Finned Pumpkin (X = -1.45m, Y = 0.34m, Z = 0.0m)
-  addBox(-1.45, 0.34, 0.0, 0.28, 0.24, 0.30, drvROpts);
-  // Rear Heavy-Duty Left & Right Halfshafts out to Rear Wheel Hubs (Z = -0.78 .. +0.78m)
-  addCylinderZ(-1.45, 0.34, -0.76, -0.15, 0.038, 6, chassis3DState.wheelAngleRear, drvROpts);
-  addCylinderZ(-1.45, 0.34, 0.15, 0.76, 0.038, 6, chassis3DState.wheelAngleRear, drvROpts);
+  // [6] Front Propeller Shaft (X = +0.34 .. +1.18 m at Z = +0.36 m, parallel to 8AT [2])
+  addCylinderX(0.34, 1.18, 0.36, 0.36, 0.048, 8, drvFOpts);
+  // Red/accented coupling flanges at both ends of Front Propshaft [6]
+  addCylinderX(0.34, 0.39, 0.36, 0.36, 0.085, 6, flangeFOpts);
+  addCylinderX(1.13, 1.18, 0.36, 0.36, 0.085, 6, flangeFOpts);
+
+  // [7] Front Differential Carrier mounted on RH (+Z = +0.36 m) side of V6 Engine [1] at Front Axle X = +1.45 m
+  addCylinderX(1.18, 1.32, 0.35, 0.36, 0.09, 8, flangeFOpts); // Input pinion neck
+  addBox(1.45, 0.35, 0.36, 0.26, 0.22, 0.22, flangeFOpts);     // Main Front Diff housing [7]
+
+  // RH (Top in Top-View) Short Front CV Halfshaft (Z = +0.47 .. +0.76 m at X = +1.45 m)
+  addCylinderZ(1.45, 0.334, 0.47, 0.76, 0.032, 6, chassis3DState.wheelAngleFront, drvFOpts);
+
+  // LH (Bottom in Top-View) Through-Sump Intermediate Jackshaft Housing emerging from bottom of V6 [1] (Z = -0.24 .. -0.48 m)
+  addCylinderZ(1.45, 0.334, -0.48, -0.24, 0.058, 8, 0, drvFOpts);
+  // LH Front CV Halfshaft from Intermediate Shaft to LH Front Wheel Hub (Z = -0.76 .. -0.48 m)
+  addCylinderZ(1.45, 0.334, -0.76, -0.48, 0.032, 6, chassis3DState.wheelAngleFront, drvFOpts);
+
+  // ==========================================================================
+  // [4] & [3] SUB-MODULE: REAR PROPSHAFT [4], REAR LSD DIFF [3] & REAR HALFSHAFTS
+  // Matches schematic: [4] runs straight down centerline Z = 0.0 from Transfer Case [5]
+  // to Rear Diff [3] at X = -1.45 m, with equal-length halfshafts to rear wheels.
+  // ==========================================================================
+  const drvROpts = { module: "driveline_r", heat: heatVals.driveline_r, width: 2.0, glow: heatVals.driveline_r > 65 };
+  const flangeROpts = { module: "driveline_r", heat: Math.min(100, heatVals.driveline_r + 12), width: 2.25 };
+
+  // [4] Rear Propeller Shaft along centerline Z = 0.0 (X = -1.16 .. -0.02 m)
+  addCylinderX(-1.16, -0.02, 0.36, 0.0, 0.058, 8, drvROpts);
+  // Coupling flanges at both ends of Rear Propshaft [4]
+  addCylinderX(-0.08, -0.02, 0.36, 0.0, 0.095, 6, flangeROpts);
+  addCylinderX(-1.16, -1.10, 0.36, 0.0, 0.095, 6, flangeROpts);
+
+  // [3] Rear Limited-Slip Differential (LSD) Carrier at X = -1.45 m, Z = 0.0 m
+  addCylinderX(-1.30, -1.16, 0.35, 0.0, 0.095, 8, flangeROpts); // Forward pinion nose
+  addBox(-1.45, 0.35, 0.0, 0.30, 0.24, 0.28, flangeROpts);      // Main Rear Diff housing [3]
+  addCylinderZ(-1.45, 0.34, -0.22, 0.22, 0.085, 8, 0, flangeROpts); // Side output bosses
+
+  // Rear Heavy-Duty Left & Right Halfshafts out to Rear Wheel Hubs (Z = -0.76 .. -0.22 & +0.22 .. +0.76 m)
+  addCylinderZ(-1.45, 0.334, -0.76, -0.22, 0.036, 6, chassis3DState.wheelAngleRear, drvROpts);
+  addCylinderZ(-1.45, 0.334, 0.22, 0.76, 0.036, 6, chassis3DState.wheelAngleRear, drvROpts);
 
   // ==========================================================================
   // 6. SUB-MODULE: FRONT & REAR TIRES, WHEELS & BREMBO BRAKES ("tires")
@@ -2635,15 +2671,15 @@ function buildStingerWireframeSegments(sample, heatVals, airflowRestrPct) {
   };
 
   // Front Left & Right Wheels (225/40R19 -> R = 0.334m, Width = 0.23m)
-  addCylinderZ(1.45, 0.334, -0.90, -0.67, 0.334, 14, chassis3DState.wheelAngleFront, tireFOpts);
-  addCylinderZ(1.45, 0.334, 0.67, 0.90, 0.334, 14, chassis3DState.wheelAngleFront, tireFOpts);
+  addCylinderZ(1.45, 0.334, -0.92, -0.68, 0.334, 16, chassis3DState.wheelAngleFront, tireFOpts);
+  addCylinderZ(1.45, 0.334, 0.68, 0.92, 0.334, 16, chassis3DState.wheelAngleFront, tireFOpts);
   // Front Brembo Brake Rotors
   addCylinderZ(1.45, 0.334, -0.74, -0.70, 0.19, 10, chassis3DState.wheelAngleFront, brakeOpts);
   addCylinderZ(1.45, 0.334, 0.70, 0.74, 0.19, 10, chassis3DState.wheelAngleFront, brakeOpts);
 
   // Rear Left & Right Wheels (255/35R19 -> R = 0.334m, Width = 0.26m)
-  addCylinderZ(-1.45, 0.334, -0.92, -0.66, 0.334, 14, chassis3DState.wheelAngleRear, tireROpts);
-  addCylinderZ(-1.45, 0.334, 0.66, 0.92, 0.334, 14, chassis3DState.wheelAngleRear, tireROpts);
+  addCylinderZ(-1.45, 0.334, -0.94, -0.66, 0.334, 16, chassis3DState.wheelAngleRear, tireROpts);
+  addCylinderZ(-1.45, 0.334, 0.66, 0.94, 0.334, 16, chassis3DState.wheelAngleRear, tireROpts);
   // Rear Brembo Brake Rotors
   addCylinderZ(-1.45, 0.334, -0.73, -0.69, 0.18, 10, chassis3DState.wheelAngleRear, brakeOpts);
   addCylinderZ(-1.45, 0.334, 0.69, 0.73, 0.18, 10, chassis3DState.wheelAngleRear, brakeOpts);
@@ -2658,7 +2694,7 @@ function renderSubmoduleInspectorCards(s) {
   const cards = [
     {
       id: "engine",
-      name: "1. 3.3L Twin-Turbo V6 & FMIC",
+      name: "[1] 3.3L Twin-Turbo V6 (6-Cyl) & FMIC",
       stress: s.stress_engine_pct || 0,
       tempLabel: `EGT ${(s.temp_egt_c || 0).toFixed(0)}&deg;C | IAT ${(s.temp_iat_c || 0).toFixed(1)}&deg;C`,
       m1: `Torque: ${(s.eng_nm || 0).toFixed(0)} Nm @ ${Math.round(s.rpm || 0)} RPM`,
@@ -2666,7 +2702,7 @@ function renderSubmoduleInspectorCards(s) {
     },
     {
       id: "trans",
-      name: "2. A8LR1 8AT & Torque Converter",
+      name: "[2] A8LR1 8AT & Torque Converter",
       stress: s.stress_trans_pct || 0,
       tempLabel: `ATF ${(s.temp_trans_c || 0).toFixed(1)}&deg;C`,
       m1: `Gear: ${s.gear || 1} ${s.shift ? "(SHIFT INERTIA PHASE)" : "(COUPLED)"}`,
@@ -2674,7 +2710,7 @@ function renderSubmoduleInspectorCards(s) {
     },
     {
       id: "awd",
-      name: "3. Magna ATC AWD Transfer Case",
+      name: "[5] Magna ATC Transfer Case (RH Drop)",
       stress: s.stress_awd_pct || 0,
       tempLabel: `Clutch ${(s.temp_awd_c || 0).toFixed(1)}&deg;C`,
       m1: `Coupling: ${(s.awd_actual_nm || 0).toFixed(0)} Nm (${(s.awd_split_pct || 0).toFixed(0)}% Front)`,
@@ -2682,7 +2718,7 @@ function renderSubmoduleInspectorCards(s) {
     },
     {
       id: "driveline_f",
-      name: "4. Front Propshaft, Diff & Axles",
+      name: "[6,7] Front Propshaft, Diff & Sump Axle",
       stress: s.stress_drive_f_pct || 0,
       tempLabel: `Diff ${(s.temp_front_diff_c || 0).toFixed(1)}&deg;C`,
       m1: `Front Prop Torque: ${(s.front_prop_nm || 0).toFixed(0)} Nm`,
@@ -2690,7 +2726,7 @@ function renderSubmoduleInspectorCards(s) {
     },
     {
       id: "driveline_r",
-      name: "5. Rear Propshaft, LSD & Axles",
+      name: "[3,4] Rear Propshaft, LSD Diff & Axles",
       stress: s.stress_drive_r_pct || 0,
       tempLabel: `LSD ${(s.temp_rear_diff_c || 0).toFixed(1)}&deg;C`,
       m1: `Rear Prop Torque: ${(s.rear_prop_nm || 0).toFixed(0)} Nm`,
@@ -2698,7 +2734,7 @@ function renderSubmoduleInspectorCards(s) {
     },
     {
       id: "tires",
-      name: "6. Front & Rear Tires + Brakes",
+      name: "Tires, Wheels & Brembo Brakes",
       stress: Math.max(s.stress_tire_r_pct || 0, s.stress_tire_f_pct || 0),
       tempLabel: `R ${(s.temp_tire_r_c || 0).toFixed(1)}&deg;C | F ${(s.temp_tire_f_c || 0).toFixed(1)}&deg;C`,
       m1: `Wheel Slip: Rear ${(s.slip_r_pct || 0).toFixed(1)}% | Front ${(s.slip_f_pct || 0).toFixed(1)}%`,
