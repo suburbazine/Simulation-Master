@@ -152,6 +152,9 @@
                 <button type="button" class="cam-preset-btn" data-cam="side">Side Squat</button>
                 <button type="button" class="cam-preset-btn" data-cam="top">Top X-Ray</button>
                 <button type="button" class="cam-preset-btn" data-cam="under">Underbody AWD</button>
+                <span class="toolbar-label" style="margin-left:6px;">DRAG:</span>
+                <button type="button" class="cam-drag-btn mod-focus-btn active" data-dragmode="orbit" title="Left-click drag orbits/tilts 3D camera">Orbit / Tilt</button>
+                <button type="button" class="cam-drag-btn mod-focus-btn" data-dragmode="pan" title="Left-click drag pans X/Y (or hold Shift / Right-Click in Orbit mode)">Pan 3D</button>
                 <select id="selChassisRun" class="chassis-select" title="Select which run's telemetry drives the 3D wireframe">
                   <option value="B">Inspecting: Run B (Comparison)</option>
                   <option value="A">Inspecting: Run A (Baseline)</option>
@@ -168,7 +171,7 @@
               <canvas id="canvasChassis3D" width="960" height="440"></canvas>
               <div class="chassis-hud-overlay" id="chassisHudOverlay">
                 <div class="hud-title">KIA STINGER GT (CK) 3.3T AWD WIREFRAME</div>
-                <div class="hud-sub" id="chassisHudSub">Drag mouse to orbit 3D &bull; Scroll wheel to zoom &bull; Click sub-module buttons to isolate</div>
+                <div class="hud-sub" id="chassisHudSub">Left-Drag: Orbit/Tilt &bull; Right-Drag or Shift+Drag: Pan 1:1 &bull; Scroll: Zoom</div>
               </div>
               <div class="chassis-colorbar">
                 <span class="cb-label">HOT-SPOT SCALE:</span>
@@ -944,6 +947,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20261016_v3"></script>
+  <script src="app.js?v=20261016_v4"></script>
 </body>
 </html>

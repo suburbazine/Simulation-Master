@@ -1635,19 +1635,103 @@ function formatBytes(bytes) {
 // ============================================================================
 // INTERACTIVE 3D KIA STINGER GT (CK) WIREFRAME, SUB-MODULE STRESS & THERMAL STUDIO
 // ============================================================================
+// Compute exact orthonormal [R, U, F] camera basis from (yaw, pitch) for presets:
+//   R = Screen Right unit vector (-X Rear is Right, +X Front is Left at yaw=0)
+//   U = Screen Up unit vector    (+Y Roof is Up at pitch=0; +Z RH side is Up at pitch=+pi/2 Top X-Ray)
+//   F = Camera Forward unit vector (Target - Eye)/dist
+function computeOrthonormalBasis(yaw, pitch) {
+  const cosY = Math.cos(yaw);
+  const sinY = Math.sin(yaw);
+  const cosP = Math.cos(pitch);
+  const sinP = Math.sin(pitch);
+  return {
+    rx: -cosY,
+    ry: 0.0,
+    rz: sinY,
+    ux: sinY * sinP,
+    uy: cosP,
+    uz: cosY * sinP,
+    fx: cosP * sinY,
+    fy: -sinP,
+    fz: cosP * cosY,
+  };
+}
+
+// Gram-Schmidt orthonormalization of [R, U, F] (guarantees R.U = R.F = U.F = 0 and |R|=|U|=|F|=1)
+function orthonormalizeCameraBasis(stateObj, prefix = "") {
+  const rxKey = prefix ? `${prefix}Rx` : "rx";
+  const ryKey = prefix ? `${prefix}Ry` : "ry";
+  const rzKey = prefix ? `${prefix}Rz` : "rz";
+  const uxKey = prefix ? `${prefix}Ux` : "ux";
+  const uyKey = prefix ? `${prefix}Uy` : "uy";
+  const uzKey = prefix ? `${prefix}Uz` : "uz";
+  const fxKey = prefix ? `${prefix}Fx` : "fx";
+  const fyKey = prefix ? `${prefix}Fy` : "fy";
+  const fzKey = prefix ? `${prefix}Fz` : "fz";
+
+  // 1. Normalize Forward vector F
+  const fLen = Math.hypot(stateObj[fxKey], stateObj[fyKey], stateObj[fzKey]) || 1.0;
+  const fx = stateObj[fxKey] / fLen;
+  const fy = stateObj[fyKey] / fLen;
+  const fz = stateObj[fzKey] / fLen;
+
+  // 2. Orthogonalize & normalize Right vector R against F: R = normalize(R - (R.F)F)
+  const rf = stateObj[rxKey] * fx + stateObj[ryKey] * fy + stateObj[rzKey] * fz;
+  let rx = stateObj[rxKey] - rf * fx;
+  let ry = stateObj[ryKey] - rf * fy;
+  let rz = stateObj[rzKey] - rf * fz;
+  const rLen = Math.hypot(rx, ry, rz) || 1.0;
+  rx /= rLen;
+  ry /= rLen;
+  rz /= rLen;
+
+  // 3. Compute True Up vector U = -(F x R) so [R, U, F] is strictly orthonormal
+  const ux = -(fy * rz - fz * ry);
+  const uy = -(fz * rx - fx * rz);
+  const uz = -(fx * ry - fy * rx);
+
+  stateObj[rxKey] = rx;
+  stateObj[ryKey] = ry;
+  stateObj[rzKey] = rz;
+  stateObj[uxKey] = ux;
+  stateObj[uyKey] = uy;
+  stateObj[uzKey] = uz;
+  stateObj[fxKey] = fx;
+  stateObj[fyKey] = fy;
+  stateObj[fzKey] = fz;
+}
+
+const initBasis = computeOrthonormalBasis(-0.52, 0.44);
+
 const chassis3DState = {
-  yaw: -0.52,
-  pitch: 0.44,
+  rx: initBasis.rx,
+  ry: initBasis.ry,
+  rz: initBasis.rz,
+  ux: initBasis.ux,
+  uy: initBasis.uy,
+  uz: initBasis.uz,
+  fx: initBasis.fx,
+  fy: initBasis.fy,
+  fz: initBasis.fz,
+  goalRx: initBasis.rx,
+  goalRy: initBasis.ry,
+  goalRz: initBasis.rz,
+  goalUx: initBasis.ux,
+  goalUy: initBasis.uy,
+  goalUz: initBasis.uz,
+  goalFx: initBasis.fx,
+  goalFy: initBasis.fy,
+  goalFz: initBasis.fz,
   dist: 5.1,
   targetX: 0.0,
   targetY: 0.42,
   targetZ: 0.0,
-  goalYaw: -0.52,
-  goalPitch: 0.44,
   goalDist: 5.1,
   goalTargetX: 0.0,
   goalTargetY: 0.42,
   goalTargetZ: 0.0,
+  dragMode: "orbit", // "orbit" or "pan"
+  activeDragAction: "orbit",
   focusModule: "all",
   activeRun: "B",
   heatMode: "stress",
@@ -1664,6 +1748,35 @@ const chassis3DState = {
   lastTickMs: 0,
 };
 
+function setGoalBasisFromAngles(yaw, pitch) {
+  const b = computeOrthonormalBasis(yaw, pitch);
+  chassis3DState.goalRx = b.rx;
+  chassis3DState.goalRy = b.ry;
+  chassis3DState.goalRz = b.rz;
+  chassis3DState.goalUx = b.ux;
+  chassis3DState.goalUy = b.uy;
+  chassis3DState.goalUz = b.uz;
+  chassis3DState.goalFx = b.fx;
+  chassis3DState.goalFy = b.fy;
+  chassis3DState.goalFz = b.fz;
+}
+
+function syncGoalToCurrentCamera() {
+  chassis3DState.goalRx = chassis3DState.rx;
+  chassis3DState.goalRy = chassis3DState.ry;
+  chassis3DState.goalRz = chassis3DState.rz;
+  chassis3DState.goalUx = chassis3DState.ux;
+  chassis3DState.goalUy = chassis3DState.uy;
+  chassis3DState.goalUz = chassis3DState.uz;
+  chassis3DState.goalFx = chassis3DState.fx;
+  chassis3DState.goalFy = chassis3DState.fy;
+  chassis3DState.goalFz = chassis3DState.fz;
+  chassis3DState.goalDist = chassis3DState.dist;
+  chassis3DState.goalTargetX = chassis3DState.targetX;
+  chassis3DState.goalTargetY = chassis3DState.targetY;
+  chassis3DState.goalTargetZ = chassis3DState.targetZ;
+}
+
 const MODULE_CAMERA_TARGETS = {
   all: { x: 0.0, y: 0.42, z: 0.0, dist: 5.1, yaw: -0.52, pitch: 0.44, label: "ALL MODULES [1-7] (FULL STINGER GT)" },
   engine: { x: 1.42, y: 0.46, z: 0.0, dist: 2.25, yaw: -0.45, pitch: 0.52, label: "[1] 3.3L TWIN-TURBO V6 & FMIC" },
@@ -1676,39 +1789,138 @@ const MODULE_CAMERA_TARGETS = {
 
 function setupChassis3DStudio() {
   const canvas = document.getElementById("canvasChassis3D");
-  if (!canvas) return;
+  if (!canvas || canvas.dataset.bound === "1") return;
+  canvas.dataset.bound = "1";
 
-  // Mouse Orbit & Wheel Zoom
+  // Prevent browser context menu on right-click drag so Right-Click Pan works cleanly
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  // Mouse Down: Determine whether this drag is Orbit/Tilt or 1:1 3D Pan
   canvas.addEventListener("mousedown", (e) => {
     chassis3DState.dragging = true;
     chassis3DState.lastMouseX = e.clientX;
     chassis3DState.lastMouseY = e.clientY;
+    if (e.button === 1 || e.button === 2 || e.shiftKey || chassis3DState.dragMode === "pan") {
+      chassis3DState.activeDragAction = "pan";
+    } else {
+      chassis3DState.activeDragAction = "orbit";
+    }
+    syncGoalToCurrentCamera();
   });
+
   window.addEventListener("mousemove", (e) => {
     if (!chassis3DState.dragging) return;
     const dx = e.clientX - chassis3DState.lastMouseX;
     const dy = e.clientY - chassis3DState.lastMouseY;
     chassis3DState.lastMouseX = e.clientX;
     chassis3DState.lastMouseY = e.clientY;
-    chassis3DState.yaw -= dx * 0.0085;
-    chassis3DState.pitch = Math.max(-1.25, Math.min(1.52, chassis3DState.pitch + dy * 0.0075));
-    chassis3DState.goalYaw = chassis3DState.yaw;
-    chassis3DState.goalPitch = chassis3DState.pitch;
-    renderChassis3DScene();
-  });
-  window.addEventListener("mouseup", () => {
-    chassis3DState.dragging = false;
-  });
-  canvas.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    const factor = e.deltaY > 0 ? 1.09 : 0.91;
-    chassis3DState.dist = Math.max(1.35, Math.min(9.0, chassis3DState.dist * factor));
-    chassis3DState.goalDist = chassis3DState.dist;
+    if (dx === 0 && dy === 0) return;
+
+    const w = canvas.width || 960;
+    const h = canvas.height || 440;
+    const fov = Math.min(w, h) * 1.12;
+
+    if (chassis3DState.activeDragAction === "pan" || e.shiftKey) {
+      // 1-to-1 Pixel-Locked 3D Screen-Plane Pan:
+      // At the target depth (dist), 1 screen pixel = (dist / fov) meters in world space.
+      const metersPerPx = chassis3DState.dist / fov;
+      chassis3DState.targetX += (-dx * chassis3DState.rx + dy * chassis3DState.ux) * metersPerPx;
+      chassis3DState.targetY += (-dx * chassis3DState.ry + dy * chassis3DState.uy) * metersPerPx;
+      chassis3DState.targetZ += (-dx * chassis3DState.rz + dy * chassis3DState.uz) * metersPerPx;
+    } else {
+      // Consistent Screen-Space Arcball Orbit / Tilt (Zero Gimbal Lock, Constant Speed at All Angles):
+      // Rotate [R, F] horizontally around Screen Up U by dThetaX, and [U, F] vertically around Screen Right R by dThetaY.
+      const radPerPx = 1.65 / fov;
+      const dThetaX = dx * radPerPx;
+      const dThetaY = dy * radPerPx;
+
+      // 1. Horizontal rotation in (R, F) plane around U
+      const cosX = Math.cos(dThetaX);
+      const sinX = Math.sin(dThetaX);
+      const rx1 = chassis3DState.rx * cosX - chassis3DState.fx * sinX;
+      const ry1 = chassis3DState.ry * cosX - chassis3DState.fy * sinX;
+      const rz1 = chassis3DState.rz * cosX - chassis3DState.fz * sinX;
+      const fx1 = chassis3DState.fx * cosX + chassis3DState.rx * sinX;
+      const fy1 = chassis3DState.fy * cosX + chassis3DState.ry * sinX;
+      const fz1 = chassis3DState.fz * cosX + chassis3DState.rz * sinX;
+      chassis3DState.rx = rx1;
+      chassis3DState.ry = ry1;
+      chassis3DState.rz = rz1;
+      chassis3DState.fx = fx1;
+      chassis3DState.fy = fy1;
+      chassis3DState.fz = fz1;
+
+      // 2. Vertical tilt in (U, F) plane around R
+      const cosY = Math.cos(dThetaY);
+      const sinY = Math.sin(dThetaY);
+      const ux2 = chassis3DState.ux * cosY + chassis3DState.fx * sinY;
+      const uy2 = chassis3DState.uy * cosY + chassis3DState.fy * sinY;
+      const uz2 = chassis3DState.uz * cosY + chassis3DState.fz * sinY;
+      const fx2 = chassis3DState.fx * cosY - chassis3DState.ux * sinY;
+      const fy2 = chassis3DState.fy * cosY - chassis3DState.uy * sinY;
+      const fz2 = chassis3DState.fz * cosY - chassis3DState.uz * sinY;
+      chassis3DState.ux = ux2;
+      chassis3DState.uy = uy2;
+      chassis3DState.uz = uz2;
+      chassis3DState.fx = fx2;
+      chassis3DState.fy = fy2;
+      chassis3DState.fz = fz2;
+
+      // 3. Enforce strict Gram-Schmidt orthonormalization so skew is mathematically impossible
+      orthonormalizeCameraBasis(chassis3DState);
+    }
+
+    syncGoalToCurrentCamera();
     renderChassis3DScene();
   });
 
+  window.addEventListener("mouseup", () => {
+    chassis3DState.dragging = false;
+  });
+
+  // Cursor-Anchored 3D Wheel Zoom (Zooms directly toward/away from the point under the cursor)
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = (canvas.width || 960) / Math.max(1, rect.width);
+    const scaleY = (canvas.height || 440) / Math.max(1, rect.height);
+    const mx = (e.clientX - rect.left) * scaleX;
+    const my = (e.clientY - rect.top) * scaleY;
+
+    const w = canvas.width || 960;
+    const h = canvas.height || 440;
+    const fov = Math.min(w, h) * 1.12;
+    const cx = mx - w * 0.5;
+    const cy = h * 0.52 - my;
+
+    const oldDist = chassis3DState.dist;
+    const factor = e.deltaY > 0 ? 1.09 : 0.91;
+    const newDist = Math.max(1.25, Math.min(9.5, oldDist * factor));
+    const deltaDist = oldDist - newDist;
+
+    // Shift Target along cursor ray so the point under the cursor stays stationary while zooming
+    const shiftScale = deltaDist / fov;
+    chassis3DState.targetX += (cx * chassis3DState.rx + cy * chassis3DState.ux) * shiftScale;
+    chassis3DState.targetY += (cx * chassis3DState.ry + cy * chassis3DState.uy) * shiftScale;
+    chassis3DState.targetZ += (cx * chassis3DState.rz + cy * chassis3DState.uz) * shiftScale;
+    chassis3DState.dist = newDist;
+
+    syncGoalToCurrentCamera();
+    renderChassis3DScene();
+  });
+
+  // Orbit / Pan Drag Mode Toggle Buttons
+  document.querySelectorAll(".cam-drag-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      chassis3DState.dragMode = btn.dataset.dragmode || "orbit";
+      document.querySelectorAll(".cam-drag-btn").forEach((b) => {
+        b.classList.toggle("active", b.dataset.dragmode === chassis3DState.dragMode);
+      });
+    });
+  });
+
   // Sub-Module Focus Isolation Buttons
-  document.querySelectorAll(".mod-focus-btn").forEach((btn) => {
+  document.querySelectorAll(".mod-focus-btn[data-focus]").forEach((btn) => {
     btn.addEventListener("click", () => {
       setChassisSubmoduleFocus(btn.dataset.focus || "all");
     });
@@ -1725,23 +1937,19 @@ function setupChassis3DStudio() {
 
       if (mode === "iso") {
         // 3/4 Isometric View (Front [1] on Left, Rear [3] on Right, Transfer Case [5] & Front Propshaft [6] on Top-Left)
-        chassis3DState.goalYaw = -0.52;
-        chassis3DState.goalPitch = 0.44;
+        setGoalBasisFromAngles(-0.52, 0.44);
         chassis3DState.goalDist = basePreset.dist;
       } else if (mode === "side") {
         // Pure Side Squat Profile (Front [1] on Left, Rear [3] on Right, Roof +Y on Top)
-        chassis3DState.goalYaw = 0.0;
-        chassis3DState.goalPitch = 0.05;
+        setGoalBasisFromAngles(0.0, 0.04);
         chassis3DState.goalDist = chassis3DState.focusModule === "all" ? 5.0 : basePreset.dist;
       } else if (mode === "top") {
-        // Exact Top-Down Schematic Plan View (Matches uploaded diagram: [1] Front Left, [3] Rear Right, [5,6,7] Top RH side)
-        chassis3DState.goalYaw = 0.0;
-        chassis3DState.goalPitch = 1.50;
+        // Exact 90-Degree Top-Down Schematic Plan View ([1] Front Left, [3] Rear Right, [5,6,7] Top RH side)
+        setGoalBasisFromAngles(0.0, Math.PI * 0.5);
         chassis3DState.goalDist = chassis3DState.focusModule === "all" ? 5.2 : basePreset.dist * 1.15;
       } else if (mode === "under") {
         // Underbody AWD & Exhaust View (Looking up from below ground)
-        chassis3DState.goalYaw = -0.38;
-        chassis3DState.goalPitch = -0.58;
+        setGoalBasisFromAngles(-0.38, -0.58);
         chassis3DState.goalDist = chassis3DState.focusModule === "all" ? 4.8 : basePreset.dist;
       }
       startChassisSmoothLoop();
@@ -1812,7 +2020,7 @@ function setupChassis3DStudio() {
 
 function setChassisSubmoduleFocus(modId) {
   chassis3DState.focusModule = modId;
-  document.querySelectorAll(".mod-focus-btn").forEach((b) => {
+  document.querySelectorAll(".mod-focus-btn[data-focus]").forEach((b) => {
     b.classList.toggle("active", b.dataset.focus === modId);
   });
   const preset = MODULE_CAMERA_TARGETS[modId] || MODULE_CAMERA_TARGETS.all;
@@ -1820,8 +2028,7 @@ function setChassisSubmoduleFocus(modId) {
   chassis3DState.goalTargetY = preset.y;
   chassis3DState.goalTargetZ = preset.z;
   chassis3DState.goalDist = preset.dist;
-  chassis3DState.goalYaw = preset.yaw;
-  chassis3DState.goalPitch = preset.pitch;
+  setGoalBasisFromAngles(preset.yaw, preset.pitch);
   const badge = document.getElementById("badgeChassisActiveMod");
   if (badge) badge.textContent = preset.label;
   startChassisSmoothLoop();
@@ -1913,31 +2120,66 @@ function startChassisSmoothLoop() {
     const dtSec = Math.min(0.1, (nowMs - chassis3DState.lastTickMs) / 1000.0);
     chassis3DState.lastTickMs = nowMs;
 
-    // Smooth camera interpolation toward goal
-    const lerp = 0.18;
+    // Smooth orthonormal camera basis & target interpolation toward goal
+    const lerp = 0.20;
     let camMoving = false;
-    const dYaw = chassis3DState.goalYaw - chassis3DState.yaw;
-    const dPitch = chassis3DState.goalPitch - chassis3DState.pitch;
+    const dRx = chassis3DState.goalRx - chassis3DState.rx;
+    const dRy = chassis3DState.goalRy - chassis3DState.ry;
+    const dRz = chassis3DState.goalRz - chassis3DState.rz;
+    const dUx = chassis3DState.goalUx - chassis3DState.ux;
+    const dUy = chassis3DState.goalUy - chassis3DState.uy;
+    const dUz = chassis3DState.goalUz - chassis3DState.uz;
+    const dFx = chassis3DState.goalFx - chassis3DState.fx;
+    const dFy = chassis3DState.goalFy - chassis3DState.fy;
+    const dFz = chassis3DState.goalFz - chassis3DState.fz;
     const dDist = chassis3DState.goalDist - chassis3DState.dist;
     const dTx = chassis3DState.goalTargetX - chassis3DState.targetX;
     const dTy = chassis3DState.goalTargetY - chassis3DState.targetY;
     const dTz = chassis3DState.goalTargetZ - chassis3DState.targetZ;
 
+    const basisDiff =
+      Math.hypot(dRx, dRy, dRz) +
+      Math.hypot(dUx, dUy, dUz) +
+      Math.hypot(dFx, dFy, dFz);
+
     if (
-      Math.abs(dYaw) > 0.002 ||
-      Math.abs(dPitch) > 0.002 ||
-      Math.abs(dDist) > 0.005 ||
+      basisDiff > 0.003 ||
+      Math.abs(dDist) > 0.004 ||
       Math.abs(dTx) > 0.002 ||
       Math.abs(dTy) > 0.002 ||
       Math.abs(dTz) > 0.002
     ) {
-      chassis3DState.yaw += dYaw * lerp;
-      chassis3DState.pitch += dPitch * lerp;
+      chassis3DState.rx += dRx * lerp;
+      chassis3DState.ry += dRy * lerp;
+      chassis3DState.rz += dRz * lerp;
+      chassis3DState.ux += dUx * lerp;
+      chassis3DState.uy += dUy * lerp;
+      chassis3DState.uz += dUz * lerp;
+      chassis3DState.fx += dFx * lerp;
+      chassis3DState.fy += dFy * lerp;
+      chassis3DState.fz += dFz * lerp;
+      orthonormalizeCameraBasis(chassis3DState);
+
       chassis3DState.dist += dDist * lerp;
       chassis3DState.targetX += dTx * lerp;
       chassis3DState.targetY += dTy * lerp;
       chassis3DState.targetZ += dTz * lerp;
       camMoving = true;
+    } else {
+      chassis3DState.rx = chassis3DState.goalRx;
+      chassis3DState.ry = chassis3DState.goalRy;
+      chassis3DState.rz = chassis3DState.goalRz;
+      chassis3DState.ux = chassis3DState.goalUx;
+      chassis3DState.uy = chassis3DState.goalUy;
+      chassis3DState.uz = chassis3DState.goalUz;
+      chassis3DState.fx = chassis3DState.goalFx;
+      chassis3DState.fy = chassis3DState.goalFy;
+      chassis3DState.fz = chassis3DState.goalFz;
+      orthonormalizeCameraBasis(chassis3DState);
+      chassis3DState.dist = chassis3DState.goalDist;
+      chassis3DState.targetX = chassis3DState.goalTargetX;
+      chassis3DState.targetY = chassis3DState.goalTargetY;
+      chassis3DState.targetZ = chassis3DState.goalTargetZ;
     }
 
     // Advance timeline if playing
@@ -2086,38 +2328,24 @@ function renderChassis3DScene() {
   // Update the 6 Sub-Module Inspector Cards on the right
   renderSubmoduleInspectorCards(sample);
 
-  // Orthonormal Right-Handed Turntable LookAt Camera Basis (Matched to Stinger Service Schematic):
-  // World Axes:
-  //   +X = Front of Vehicle ([1] V6 Engine, [7] Front Diff) -> Projects to LEFT of screen at yaw=0
-  //   -X = Rear of Vehicle ([3] Rear Diff)                  -> Projects to RIGHT of screen at yaw=0
-  //   +Y = Vertical Roof Up                                 -> Projects to TOP of screen in Side/Iso views
-  //   +Z = RH / Passenger Side ([5] Transfer Case arm, [6] Front Propshaft, [7] Front Diff) -> TOP of screen in Top X-Ray view
-  //   -Z = LH / Driver Side (Through-Sump Front Axle Tube)  -> BOTTOM of screen in Top X-Ray view
-  const cosY = Math.cos(chassis3DState.yaw);
-  const sinY = Math.sin(chassis3DState.yaw);
-  const cosP = Math.cos(chassis3DState.pitch);
-  const sinP = Math.sin(chassis3DState.pitch);
+  // Strictly Orthonormal Right-Handed Camera Basis [R, U, F] relative to Target:
+  //   R = Screen Right unit vector (-X Rear is Right, +X Front is Left in Side/Top views)
+  //   U = Screen Up unit vector    (+Y Roof is Up in Side/Iso views; +Z RH side is Top in Top X-Ray view)
+  //   F = Camera Forward unit vector (Target - Eye)/dist
+  orthonormalizeCameraBasis(chassis3DState);
+  const rxCam = chassis3DState.rx;
+  const ryCam = chassis3DState.ry;
+  const rzCam = chassis3DState.rz;
+  const uxCam = chassis3DState.ux;
+  const uyCam = chassis3DState.uy;
+  const uzCam = chassis3DState.uz;
+  const fx = chassis3DState.fx;
+  const fy = chassis3DState.fy;
+  const fz = chassis3DState.fz;
   const dist = chassis3DState.dist;
-
-  // Camera Eye Position in World Space
-  const eyeX = chassis3DState.targetX - dist * cosP * sinY;
-  const eyeY = chassis3DState.targetY + dist * sinP;
-  const eyeZ = chassis3DState.targetZ - dist * cosP * cosY;
-
-  // Camera Forward Unit Vector F = normalize(Target - Eye)
-  const fx = cosP * sinY;
-  const fy = -sinP;
-  const fz = cosP * cosY;
-
-  // Camera Right Unit Vector R = F x WorldUp (Horizontal Right on Screen; -X Rear is Right, +X Front is Left)
-  const rxCam = -cosY;
-  const ryCam = 0.0;
-  const rzCam = sinY;
-
-  // Camera True Up Unit Vector U = R x F (Vertical Up on Screen; U_y = cosP > 0, U_z = +sinP at yaw=0)
-  const uxCam = -sinY * sinP;
-  const uyCam = cosP;
-  const uzCam = cosY * sinP;
+  const tx = chassis3DState.targetX;
+  const ty = chassis3DState.targetY;
+  const tz = chassis3DState.targetZ;
 
   const fov = Math.min(w, h) * 1.12;
 
@@ -2137,15 +2365,15 @@ function renderChassis3DScene() {
       wy = rotY;
     }
 
-    // Vector from Camera Eye to World Point
-    const vx = wx - eyeX;
-    const vy = wy - eyeY;
-    const vz = wz - eyeZ;
+    // Offset from 3D Pivot Target (guarantees Target always projects to xCam = 0, yCam = 0, zCam = dist)
+    const dxW = wx - tx;
+    const dyW = wy - ty;
+    const dzW = wz - tz;
 
-    // Project onto Orthonormal Camera Basis (R, U, F)
-    const xCam = vx * rxCam + vy * ryCam + vz * rzCam;
-    const yCam = vx * uxCam + vy * uyCam + vz * uzCam;
-    const zCam = vx * fx + vy * fy + vz * fz;
+    // Project onto Strictly Orthonormal Camera Basis (R, U, F)
+    const xCam = dxW * rxCam + dyW * ryCam + dzW * rzCam;
+    const yCam = dxW * uxCam + dyW * uyCam + dzW * uzCam;
+    const zCam = dist + dxW * fx + dyW * fy + dzW * fz;
 
     if (zCam < 0.25) return null;
     const scale = fov / zCam;
